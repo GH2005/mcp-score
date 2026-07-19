@@ -36,3 +36,6 @@ result
 
 # Generated scores (user output, not tracked)
 output/
+
+# Live-test snapshots and renders (ground-truth exports, regenerated per run)
+tests/live/artifacts/
