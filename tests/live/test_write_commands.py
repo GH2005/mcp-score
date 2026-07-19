@@ -170,10 +170,11 @@ async def test_set_barline_unknown_type_returns_error(
 
 
 @pytest.mark.xfail(
-    reason="setKeySignature writes the wrong key in MuseScore 4.7.4: "
-    "requesting fifths=2 produced fifths=-8 in the exported score (the "
-    "KEYSIG element's key property maps differently in MS4). Fix "
-    "planned (PR5).",
+    reason="setKeySignature is unsupported in MuseScore 4.7.4: cursor.add "
+    "clones and corrupts the KEYSIG element -- every inserted key "
+    "signature exports as fifths=-8 regardless of the value written, and "
+    "re-assigning after insertion does not help (verified 2026-07-19). "
+    "The MCP tool guards this server-side.",
     strict=True,
 )
 async def test_set_key_signature(
@@ -234,10 +235,11 @@ async def test_set_time_signature(
 
 
 @pytest.mark.xfail(
-    reason="setTempo produces an empty metronome mark in MuseScore "
-    "4.7.4: the exported score has a tempo entry with no number and no "
-    "text (TEMPO_TEXT text/tempo properties do not take effect). Fix "
-    "planned (PR5).",
+    reason="setTempo is unsupported in MuseScore 4.7.4: cursor.add clones "
+    "and corrupts the TEMPO_TEXT element -- the exported tempo mark has "
+    "no text and no number regardless of what was written, and "
+    "re-assigning after insertion does not help (verified 2026-07-19). "
+    "The MCP tool guards this server-side.",
     strict=True,
 )
 async def test_set_tempo(

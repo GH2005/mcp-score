@@ -390,6 +390,25 @@ async def test_crash_guarded_tools_refuse_musescore(
         assert "crashes MuseScore" in reply["error"]
 
 
+async def test_corruption_guarded_tools_refuse_musescore(
+    bridge: MuseScoreBridge,
+) -> None:
+    """set_live_key_signature/set_live_tempo must refuse rather than let
+    the plugin write corrupt elements into the score."""
+    for coro in (set_live_key_signature(1, 2), set_live_tempo(1, 90)):
+        reply = json.loads(await coro)
+        assert "error" in reply
+        assert "corrupts" in reply["error"]
+
+    reply = json.loads(
+        await process_live_sequence(
+            [{"action": "setKeySignature", "params": {"fifths": 2}}]
+        )
+    )
+    assert "error" in reply
+    assert "corrupts" in reply["error"]
+
+
 # ── Connection churn (kept last; each test restores the connection) ──
 
 
