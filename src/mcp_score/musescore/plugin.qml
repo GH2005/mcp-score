@@ -15,7 +15,7 @@
 //   addRehearsalMark, setBarline, setKeySignature, setTimeSignature,
 //   setTempo, addChordSymbol, addDynamic, appendMeasures,
 //   selectCurrentMeasure, selectCustomRange, transpose, undo,
-//   processSequence, exportScore, apiProbe
+//   processSequence, exportScore, newScore, apiProbe
 //
 // setBarline, addChordSymbol, and addDynamic crash MuseScore Studio
 // 4.7.4 (newElement + cursor.add is fatal for those element types) and
@@ -139,6 +139,7 @@ MuseScore {
                 case "undo":                return handleUndo();
                 case "processSequence":     return handleProcessSequence(params);
                 case "exportScore":         return handleExportScore(params);
+                case "newScore":            return handleNewScore(params);
                 case "apiProbe":            return handleApiProbe();
                 default:
                     return { error: "Unknown command: " + command };
@@ -315,6 +316,33 @@ MuseScore {
         return { result: "pong" };
     }
 
+    /// Create and open a fresh score (becomes curScore). Used for
+    /// hermetic test runs and clean composition sessions.
+    /// Params: { title?: string, measures?: int }
+    function handleNewScore(params) {
+        var title = params.title || "MCP scratch";
+        var measures = safeParseInt(
+            params.measures !== undefined ? params.measures : 32);
+        if (measures === null || measures < 1) {
+            return { error: "measures must be >= 1" };
+        }
+
+        var score = newScore(title, "piano", measures);
+        if (!score) {
+            return { error: "newScore returned nothing" };
+        }
+        cursorMeasure = 1;
+        cursorStaff = 0;
+        cursorTick = -1;
+        return {
+            result: {
+                title: title,
+                measures: measures,
+                measureCount: countMeasures()
+            }
+        };
+    }
+
     /// Introspect the MuseScore 4 plugin API: which properties and
     /// functions actually exist at runtime, plus element property
     /// round-trips that never touch the score. Diagnostic only.
@@ -447,11 +475,14 @@ MuseScore {
         var parts = [];
         for (var i = 0; i < curScore.parts.length; i++) {
             var part = curScore.parts[i];
-            parts.push({
-                name: part.partName,
-                startStaff: part.startStaff,
-                endStaff: part.endStaff
-            });
+            // Part.startStaff/endStaff are undefined in MuseScore 4;
+            // derive them from the track range (4 voices per staff).
+            var entry = { name: part.partName };
+            if (typeof part.startTrack === "number") {
+                entry.startStaff = part.startTrack / 4;
+                entry.endStaff = part.endTrack / 4 - 1;
+            }
+            parts.push(entry);
         }
 
         var cursor = curScore.newCursor();
@@ -720,16 +751,24 @@ MuseScore {
             return { error: "No valid segment at cursor position" };
         }
 
+        var postAddKey = null;
         curScore.startCmd("setKeySignature");
         try {
             var keySig = newElement(Element.KEYSIG);
             keySig.key = fifths;
             cursor.add(keySig);
+            postAddKey = keySig.key;
         } finally {
             curScore.endCmd();
         }
 
-        return { result: { fifths: fifths, measure: cursorMeasure } };
+        return {
+            result: {
+                fifths: fifths,
+                measure: cursorMeasure,
+                postAddKey: postAddKey
+            }
+        };
     }
 
     /// Set the time signature at the current cursor position.
@@ -785,6 +824,7 @@ MuseScore {
             return { error: "No valid segment at cursor position" };
         }
 
+        var postAdd = null;
         curScore.startCmd("setTempo");
         try {
             var tempo = newElement(Element.TEMPO_TEXT);
@@ -792,11 +832,19 @@ MuseScore {
             tempo.tempo = bpm / secondsPerMinute;
             tempo.followText = false;
             cursor.add(tempo);
+            postAdd = { text: tempo.text, tempo: tempo.tempo };
         } finally {
             curScore.endCmd();
         }
 
-        return { result: { bpm: bpm, text: displayText, measure: cursorMeasure } };
+        return {
+            result: {
+                bpm: bpm,
+                text: displayText,
+                measure: cursorMeasure,
+                postAdd: postAdd
+            }
+        };
     }
 
     /// Add a chord symbol at the current cursor position.
@@ -979,9 +1027,12 @@ MuseScore {
         };
     }
 
-    /// Transpose the current selection by a number of semitones.
-    /// Params: { semitones }
-    /// Requires an active selection (use selectCurrentMeasure or selectCustomRange first).
+    /// Transpose notes by a number of semitones.
+    /// Params: { semitones, startMeasure?, endMeasure?, startStaff?, endStaff? }
+    /// With range parameters the range is walked directly (reliable).
+    /// Without them the current selection is used -- but selectRange does
+    /// not produce an active selection in MuseScore 4, so the ranged form
+    /// is the only dependable path.
     function handleTranspose(params) {
         var scoreErr = requireScore();
         if (scoreErr) return scoreErr;
@@ -995,14 +1046,19 @@ MuseScore {
             return { error: "Invalid value for semitones: " + params.semitones };
         }
 
+        // curScore.transpose() does not exist in MuseScore 4's plugin API,
+        // so transpose note-by-note: shift pitch and adjust the tonal pitch
+        // class (tpc) so the enharmonic spelling stays correct.
+
+        if (params.startMeasure !== undefined) {
+            return transposeRange(params, semitones);
+        }
+
         if (!curScore.selection || !curScore.selection.elements ||
             curScore.selection.elements.length === 0) {
             return { error: "No active selection. Use selectCurrentMeasure or selectCustomRange first." };
         }
 
-        // curScore.transpose() does not exist in MuseScore 4's plugin API,
-        // so transpose note-by-note: shift pitch and adjust the tonal pitch
-        // class (tpc) so the enharmonic spelling stays correct.
         var transposed = 0;
         curScore.startCmd("transpose");
         try {
@@ -1024,6 +1080,72 @@ MuseScore {
         }
 
         return { result: { semitones: semitones, notesTransposed: transposed } };
+    }
+
+    /// Transpose every note in an inclusive measure/staff range by
+    /// walking a cursor over each staff -- no selection required.
+    function transposeRange(params, semitones) {
+        var startMeasure = safeParseInt(params.startMeasure);
+        var endMeasure = safeParseInt(
+            params.endMeasure !== undefined ? params.endMeasure : params.startMeasure);
+        var startStaff = safeParseInt(
+            params.startStaff !== undefined ? params.startStaff : 0);
+        var endStaff = safeParseInt(
+            params.endStaff !== undefined ? params.endStaff : startStaff);
+
+        if (startMeasure === null || endMeasure === null ||
+            startStaff === null || endStaff === null) {
+            return { error: "Invalid range parameters" };
+        }
+        var totalMeasures = countMeasures();
+        if (startMeasure < 1 || endMeasure > totalMeasures ||
+            startMeasure > endMeasure) {
+            return { error: "Invalid measure range: " + startMeasure + "-" +
+                endMeasure + " (score has " + totalMeasures + " measures)" };
+        }
+        if (startStaff < 0 || endStaff >= curScore.nstaves ||
+            startStaff > endStaff) {
+            return { error: "Invalid staff range: " + startStaff + "-" +
+                endStaff + " (score has " + curScore.nstaves + " staves)" };
+        }
+
+        var transposed = 0;
+        curScore.startCmd("transpose");
+        try {
+            for (var staff = startStaff; staff <= endStaff; staff++) {
+                var cursor = curScore.newCursor();
+                cursor.staffIdx = staff;
+                cursor.voice = 0;
+                cursor.rewind(Cursor.SCORE_START);
+                for (var i = 1; i < startMeasure; i++) {
+                    cursor.nextMeasure();
+                }
+                while (cursor.segment &&
+                       measureNumberAtTick(cursor.tick) <= endMeasure) {
+                    var element = cursor.element;
+                    if (element && element.type === Element.CHORD && element.notes) {
+                        for (var j = 0; j < element.notes.length; j++) {
+                            transposeNote(element.notes[j], semitones);
+                            transposed++;
+                        }
+                    }
+                    if (!cursor.next()) break;
+                }
+            }
+        } finally {
+            curScore.endCmd();
+        }
+
+        return {
+            result: {
+                semitones: semitones,
+                startMeasure: startMeasure,
+                endMeasure: endMeasure,
+                startStaff: startStaff,
+                endStaff: endStaff,
+                notesTransposed: transposed
+            }
+        };
     }
 
     // Tonal-pitch-class delta per semitone step, chosen for conventional

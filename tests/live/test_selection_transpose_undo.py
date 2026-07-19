@@ -29,7 +29,7 @@ async def _at(bridge: MuseScoreBridge, measure: int, staff: int = 0) -> None:
     assert "result" in await bridge.go_to_measure(measure)
 
 
-async def test_select_current_measure_then_transpose(
+async def test_transpose_range_single_measure(
     bridge: MuseScoreBridge, scratch: ScratchFn, snapshot: SnapshotFn
 ) -> None:
     start, _ = await scratch(1)
@@ -37,11 +37,18 @@ async def test_select_current_measure_then_transpose(
     assert "result" in await bridge.add_note(60, QUARTER)
     before = await snapshot("selcur-before")
 
-    await _at(bridge, start)
-    reply = await bridge.send_command("selectCurrentMeasure")
-    assert "result" in reply, f"selectCurrentMeasure failed: {reply}"
-    reply = await bridge.send_command("transpose", {"semitones": 1})
-    assert reply.get("result", {}).get("semitones") == 1
+    reply = await bridge.send_command(
+        "transpose",
+        {
+            "semitones": 1,
+            "startMeasure": start,
+            "endMeasure": start,
+            "startStaff": 0,
+            "endStaff": 0,
+        },
+    )
+    assert reply.get("result", {}).get("semitones") == 1, f"transpose: {reply}"
+    assert reply["result"]["notesTransposed"] >= 1
 
     after = await snapshot("selcur-after")
     changes = mxl.diff_snapshots(before, after)
@@ -53,7 +60,7 @@ async def test_select_current_measure_then_transpose(
     assert notes[0]["names"] == ["C#4"], "expected sharp spelling for +1 from C"
 
 
-async def test_select_custom_range_then_transpose_confined(
+async def test_transpose_range_confined_to_range(
     bridge: MuseScoreBridge, scratch: ScratchFn, snapshot: SnapshotFn
 ) -> None:
     start, end = await scratch(3)  # third measure stays untouched as a control
@@ -66,16 +73,15 @@ async def test_select_custom_range_then_transpose_confined(
     before = await snapshot("selrange-before")
 
     reply = await bridge.send_command(
-        "selectCustomRange",
+        "transpose",
         {
+            "semitones": 2,
             "startMeasure": start,
             "endMeasure": start + 1,
             "startStaff": 0,
             "endStaff": 0,
         },
     )
-    assert "result" in reply, f"selectCustomRange failed: {reply}"
-    reply = await bridge.send_command("transpose", {"semitones": 2})
     assert "result" in reply, f"transpose failed: {reply}"
 
     after = await snapshot("selrange-after")
@@ -90,6 +96,33 @@ async def test_select_custom_range_then_transpose_confined(
             if e["kind"] != "rest"
         ]
         assert [e["midi"] for e in notes] == [[expected_midi]]
+
+
+@pytest.mark.xfail(
+    reason="selection.selectRange does not produce an active selection in "
+    "MuseScore 4.7.4 (selection.elements stays empty), so selection-based "
+    "transposition cannot work. Use the ranged transpose parameters "
+    "instead.",
+    strict=True,
+)
+async def test_selection_based_transpose(
+    bridge: MuseScoreBridge, scratch: ScratchFn
+) -> None:
+    start, _ = await scratch(1)
+    await _at(bridge, start)
+    assert "result" in await bridge.add_note(60, QUARTER)
+    reply = await bridge.send_command(
+        "selectCustomRange",
+        {
+            "startMeasure": start,
+            "endMeasure": start,
+            "startStaff": 0,
+            "endStaff": 0,
+        },
+    )
+    assert "result" in reply
+    reply = await bridge.send_command("transpose", {"semitones": 1})
+    assert "result" in reply, f"selection-based transpose failed: {reply}"
 
 
 async def test_select_custom_range_invalid_ranges_return_errors(
@@ -122,9 +155,16 @@ async def test_transpose_octave_up(
     assert "result" in await bridge.add_note(60, QUARTER)
     before = await snapshot("octave-before")
 
-    await _at(bridge, start)
-    assert "result" in await bridge.send_command("selectCurrentMeasure")
-    reply = await bridge.send_command("transpose", {"semitones": 13})
+    reply = await bridge.send_command(
+        "transpose",
+        {
+            "semitones": 13,
+            "startMeasure": start,
+            "endMeasure": start,
+            "startStaff": 0,
+            "endStaff": 0,
+        },
+    )
     assert "result" in reply, f"transpose failed: {reply}"
 
     after = await snapshot("octave-after")

@@ -767,21 +767,19 @@ class TestGetSelectionProperties:
 
 class TestTransposePassageErrorBranch:
     @pytest.mark.anyio()
-    async def test_transpose_with_failed_selection_returns_error(self) -> None:
+    async def test_transpose_propagates_plugin_error(self) -> None:
         # Arrange
         from mcp_score.tools.manipulation import transpose_passage
 
         mock_bridge = AsyncMock(spec=MuseScoreBridge)
         mock_bridge.is_connected = True
-        mock_bridge.go_to_measure = AsyncMock(return_value={"result": "ok"})
-        mock_bridge.go_to_staff = AsyncMock(return_value={"result": "ok"})
         mock_bridge.send_command = AsyncMock(return_value={"error": "Invalid range"})
 
         with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
             # Act
             result = json.loads(await transpose_passage(1, 4, 0, 5))
 
-        # Assert — should return the error from selectCustomRange, not call transpose
+        # Assert — the plugin's error comes straight back
         assert result["error"] == "Invalid range"
         assert mock_bridge.send_command.call_count == 1
 
@@ -953,7 +951,7 @@ class TestManipulationHappyPaths:
         assert result["result"] == "ok"
 
     @pytest.mark.anyio()
-    async def test_transpose_selects_range_and_transposes(
+    async def test_transpose_sends_single_ranged_command(
         self,
     ) -> None:
         # Arrange
@@ -961,23 +959,23 @@ class TestManipulationHappyPaths:
 
         mock_bridge = AsyncMock(spec=MuseScoreBridge)
         mock_bridge.is_connected = True
-        mock_bridge.go_to_measure = AsyncMock(return_value={"result": "ok"})
-        mock_bridge.go_to_staff = AsyncMock(return_value={"result": "ok"})
         mock_bridge.send_command = AsyncMock(return_value={"result": "ok"})
 
         with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
             # Act
             await transpose_passage(1, 8, 0, 5)
 
-        # Assert — two send_command calls: selectCustomRange + transpose
-        assert mock_bridge.send_command.call_count == 2
-        select_call = mock_bridge.send_command.call_args_list[0]
-        assert select_call.args[0] == "selectCustomRange"
-        assert select_call.args[1]["startStaff"] == 0
-        assert select_call.args[1]["endStaff"] == 0
-        transpose_call = mock_bridge.send_command.call_args_list[1]
+        # Assert — one ranged transpose message, no selection round-trip
+        assert mock_bridge.send_command.call_count == 1
+        transpose_call = mock_bridge.send_command.call_args_list[0]
         assert transpose_call.args[0] == "transpose"
-        assert transpose_call.args[1]["semitones"] == 5
+        assert transpose_call.args[1] == {
+            "semitones": 5,
+            "startMeasure": 1,
+            "endMeasure": 8,
+            "startStaff": 0,
+            "endStaff": 0,
+        }
 
     @pytest.mark.anyio()
     async def test_set_barline_navigates_and_delegates(self) -> None:
@@ -1080,15 +1078,13 @@ class TestEdgeCases:
 
         mock_bridge = AsyncMock(spec=MuseScoreBridge)
         mock_bridge.is_connected = True
-        mock_bridge.go_to_measure = AsyncMock(return_value={"result": "ok"})
-        mock_bridge.go_to_staff = AsyncMock(return_value={"result": "ok"})
         mock_bridge.send_command = AsyncMock(return_value={"result": "ok"})
 
         with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
             result = json.loads(await transpose_passage(5, 5, 0, 2))
 
         assert "error" not in result
-        assert mock_bridge.send_command.call_count == 2
+        assert mock_bridge.send_command.call_count == 1
 
 
 class TestBridgeTypeGuards:
@@ -1154,20 +1150,19 @@ class TestNavigationErrorHandling:
         mock_bridge.get_cursor_info.assert_not_called()
 
     @pytest.mark.anyio()
-    async def test_transpose_with_navigation_error_returns_error(self) -> None:
+    async def test_transpose_with_out_of_range_measure_returns_error(self) -> None:
         # Arrange
         from mcp_score.tools.manipulation import transpose_passage
 
         mock_bridge = AsyncMock(spec=MuseScoreBridge)
         mock_bridge.is_connected = True
-        mock_bridge.go_to_measure = AsyncMock(
-            return_value={"error": "Measure 99 out of range"}
+        mock_bridge.send_command = AsyncMock(
+            return_value={"error": "Invalid measure range: 99-100"}
         )
 
         with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
             # Act
             result = json.loads(await transpose_passage(99, 100, 0, 2))
 
-        # Assert
+        # Assert — range validation happens in the plugin's ranged handler
         assert "error" in result
-        mock_bridge.send_command.assert_not_called()

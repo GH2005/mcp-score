@@ -178,31 +178,19 @@ async def transpose_passage(
     if end_measure < start_measure:
         return to_json({"error": "end_measure must be >= start_measure."})
 
-    navigation_result = await bridge.go_to_measure(start_measure)
-    if "error" in navigation_result:
-        return to_json(navigation_result)
-    navigation_result = await bridge.go_to_staff(staff)
-    if "error" in navigation_result:
-        return to_json(navigation_result)
-
+    # Single ranged transpose message: the plugin walks the range with a
+    # cursor. (Selection-based transposition is unreliable in MuseScore 4:
+    # selectRange does not produce an active selection there.)
     result = await bridge.send_command(
-        "selectCustomRange",
+        "transpose",
         {
+            "semitones": semitones,
             "startMeasure": start_measure,
             "endMeasure": end_measure,
             "startStaff": staff,
             "endStaff": staff,
         },
     )
-
-    if result.get("error"):
-        return to_json(result)
-
-    result = await bridge.send_command(
-        "transpose",
-        {"semitones": semitones},
-    )
-
     return to_json(result)
 
 
