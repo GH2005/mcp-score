@@ -24,11 +24,11 @@ from music21 import (
     expressions,
     harmony,
     key,
-    meter,
     note,
     stream,
     tempo,
 )
+from music21.meter.base import TimeSignature
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -83,8 +83,7 @@ def _measure_info(measure: stream.Measure) -> dict[str, Any]:
     if keys:
         info["key"] = keys
     times = [
-        ts.ratioString
-        for ts in measure.recurse().getElementsByClass(meter.TimeSignature)
+        ts.ratioString for ts in measure.recurse().getElementsByClass(TimeSignature)
     ]
     if times:
         info["time"] = times
@@ -129,6 +128,8 @@ def parse_snapshot(path: Path) -> Snapshot:
     0-indexed staff numbering); measures are keyed by measure number.
     """
     score = converter.parse(str(path))
+    if not isinstance(score, stream.Score):
+        raise ValueError(f"Expected a Score from {path}, got {type(score).__name__}")
     staves: dict[str, dict[str, Any]] = {}
     for staff_index, part in enumerate(score.parts):
         measures: dict[str, Any] = {}
