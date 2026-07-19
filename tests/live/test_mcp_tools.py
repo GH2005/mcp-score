@@ -220,11 +220,6 @@ async def test_manipulation_tools_validate_measure(
         assert "must be >= 1" in reply["error"]
 
 
-@pytest.mark.xfail(
-    reason="curScore.transpose() does not exist in MuseScore 4.7.4, so "
-    "transpose_passage always fails. Reimplementation planned (PR5).",
-    strict=True,
-)
 async def test_transpose_passage_tool_end_to_end(
     bridge: MuseScoreBridge, scratch: ScratchFn, snapshot: SnapshotFn
 ) -> None:
@@ -393,6 +388,25 @@ async def test_crash_guarded_tools_refuse_musescore(
         reply = json.loads(await coro)
         assert "error" in reply
         assert "crashes MuseScore" in reply["error"]
+
+
+async def test_corruption_guarded_tools_refuse_musescore(
+    bridge: MuseScoreBridge,
+) -> None:
+    """set_live_key_signature/set_live_tempo must refuse rather than let
+    the plugin write corrupt elements into the score."""
+    for coro in (set_live_key_signature(1, 2), set_live_tempo(1, 90)):
+        reply = json.loads(await coro)
+        assert "error" in reply
+        assert "corrupts" in reply["error"]
+
+    reply = json.loads(
+        await process_live_sequence(
+            [{"action": "setKeySignature", "params": {"fifths": 2}}]
+        )
+    )
+    assert "error" in reply
+    assert "corrupts" in reply["error"]
 
 
 # ── Connection churn (kept last; each test restores the connection) ──

@@ -47,12 +47,14 @@ async def test_get_score_reports_expected_shape(bridge: MuseScoreBridge) -> None
         assert "name" in part
 
 
-@pytest.mark.xfail(
-    reason="Part.startStaff/endStaff are undefined in MuseScore 4.7.4's "
-    "plugin API (MuseScore 3 properties); JSON.stringify drops them, so "
-    "getScore parts carry only 'name'. Plugin fix planned (PR5).",
-    strict=True,
-)
+async def test_get_score_reports_plugin_version(
+    bridge: MuseScoreBridge,
+) -> None:
+    """Stale-plugin detection: getScore must carry the plugin version."""
+    reply = await bridge.get_score()
+    assert reply["result"].get("pluginVersion") == "0.2.0"
+
+
 async def test_get_score_parts_include_staff_ranges(
     bridge: MuseScoreBridge,
 ) -> None:

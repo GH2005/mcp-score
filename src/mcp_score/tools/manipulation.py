@@ -14,11 +14,23 @@ __all__: list[str] = []
 #: Blocked server-side until the plugin reimplements them safely.
 _CRASHING_ACTIONS = frozenset({"setBarline", "addChordSymbol", "addDynamic"})
 
+#: Plugin commands that silently write corrupt data in MuseScore 4.7.4
+#: (cursor.add clones the element and the clone loses/garbles the values).
+_CORRUPTING_ACTIONS = frozenset({"setKeySignature", "setTempo"})
+
 _CRASH_GUARD_ERROR = (
     "{action} is temporarily disabled for MuseScore: the plugin command "
     "crashes MuseScore Studio 4.7.4 outright (verified 2026-07-18). A safe "
     "reimplementation is planned; until then this guard protects the "
     "running MuseScore instance."
+)
+
+_CORRUPTION_GUARD_ERROR = (
+    "{action} is disabled for MuseScore: cursor.add clones and corrupts "
+    "the element in MuseScore Studio 4.7.4 (every inserted key signature "
+    "exports as fifths=-8 and tempo text exports empty, regardless of the "
+    "values written -- verified 2026-07-19). The command would silently "
+    "write garbage into the score."
 )
 
 _MUSESCORE_ONLY_ERROR = (
@@ -109,6 +121,9 @@ async def set_live_barline(measure: int, barline_type: str) -> str:
 async def set_live_key_signature(measure: int, fifths: int) -> str:
     """Set the key signature in the live score.
 
+    Currently disabled for MuseScore: the plugin inserts a corrupt key
+    signature (MuseScore 4.7.4 API limitation).
+
     Args:
         measure: Measure number (1-indexed).
         fifths: Number of sharps (positive) or flats (negative).
@@ -119,6 +134,10 @@ async def set_live_key_signature(measure: int, fifths: int) -> str:
         return to_json({"error": NOT_CONNECTED})
     if error := check_measure(measure):
         return error
+    if isinstance(bridge, MuseScoreBridge):
+        return to_json(
+            {"error": _CORRUPTION_GUARD_ERROR.format(action="set_live_key_signature")}
+        )
 
     await bridge.go_to_measure(measure)
     result = await bridge.set_key_signature(fifths)
@@ -128,6 +147,9 @@ async def set_live_key_signature(measure: int, fifths: int) -> str:
 @mcp.tool()
 async def set_live_tempo(measure: int, bpm: int, text: str | None = None) -> str:
     """Set the tempo in the live score.
+
+    Currently disabled for MuseScore: the plugin inserts an empty tempo
+    mark (MuseScore 4.7.4 API limitation).
 
     Args:
         measure: Measure number (1-indexed).
@@ -139,6 +161,10 @@ async def set_live_tempo(measure: int, bpm: int, text: str | None = None) -> str
         return to_json({"error": NOT_CONNECTED})
     if error := check_measure(measure):
         return error
+    if isinstance(bridge, MuseScoreBridge):
+        return to_json(
+            {"error": _CORRUPTION_GUARD_ERROR.format(action="set_live_tempo")}
+        )
 
     await bridge.go_to_measure(measure)
     result = await bridge.set_tempo(bpm, text)
@@ -178,31 +204,19 @@ async def transpose_passage(
     if end_measure < start_measure:
         return to_json({"error": "end_measure must be >= start_measure."})
 
-    navigation_result = await bridge.go_to_measure(start_measure)
-    if "error" in navigation_result:
-        return to_json(navigation_result)
-    navigation_result = await bridge.go_to_staff(staff)
-    if "error" in navigation_result:
-        return to_json(navigation_result)
-
+    # Single ranged transpose message: the plugin walks the range with a
+    # cursor. (Selection-based transposition is unreliable in MuseScore 4:
+    # selectRange does not produce an active selection there.)
     result = await bridge.send_command(
-        "selectCustomRange",
+        "transpose",
         {
+            "semitones": semitones,
             "startMeasure": start_measure,
             "endMeasure": end_measure,
             "startStaff": staff,
             "endStaff": staff,
         },
     )
-
-    if result.get("error"):
-        return to_json(result)
-
-    result = await bridge.send_command(
-        "transpose",
-        {"semitones": semitones},
-    )
-
     return to_json(result)
 
 
@@ -357,6 +371,10 @@ async def process_live_sequence(steps: list[dict[str, Any]]) -> str:
         if action in _CRASHING_ACTIONS:
             return to_json(
                 {"error": _CRASH_GUARD_ERROR.format(action=f"action '{action}'")}
+            )
+        if action in _CORRUPTING_ACTIONS:
+            return to_json(
+                {"error": _CORRUPTION_GUARD_ERROR.format(action=f"action '{action}'")}
             )
     assert isinstance(bridge, MuseScoreBridge)
 

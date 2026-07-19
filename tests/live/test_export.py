@@ -48,14 +48,13 @@ async def test_export_missing_path_returns_error(bridge: MuseScoreBridge) -> Non
     assert "path" in reply["error"]
 
 
-@pytest.mark.skip(
-    reason="mscz export is broken in MuseScore Studio 4.7.4: writeScore "
-    "produces a 0-byte file, never replies, and raises a blocking modal "
-    "dialog the user must dismiss by hand. Re-enable once the plugin "
-    "rejects the format gracefully (PR5)."
-)
-async def test_export_mscz_is_rejected() -> None:
-    pass
+async def test_export_mscz_is_rejected(bridge: MuseScoreBridge) -> None:
+    reply = await bridge.send_command(
+        "exportScore",
+        {"path": (ARTIFACTS_DIR / "never.mscz").as_posix(), "format": "mscz"},
+    )
+    assert "error" in reply
+    assert "broken" in reply["error"]
 
 
 async def test_cli_render_png_while_gui_open(bridge: MuseScoreBridge) -> None:
