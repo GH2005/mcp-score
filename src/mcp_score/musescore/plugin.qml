@@ -20,6 +20,10 @@
 // setBarline, addChordSymbol, and addDynamic crash MuseScore Studio
 // 4.7.4 (newElement + cursor.add is fatal for those element types) and
 // therefore require an explicit "__experimental": true parameter.
+// setKeySignature and setTempo insert corrupt elements in 4.7.4 (the
+// clone made by cursor.add loses the assigned values). newScore creates
+// the score in a window this bridge cannot control. See
+// docs/agent-playbook.md for the verified support matrix.
 
 import QtQuick 2.9
 import MuseScore 3.0
