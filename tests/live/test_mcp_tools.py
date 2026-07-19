@@ -30,10 +30,14 @@ from mcp_score.tools.connection import (
 )
 from mcp_score.tools.manipulation import (
     add_live_chord_symbol,
+    add_live_notes,
     add_live_rehearsal_mark,
+    append_live_measures,
+    process_live_sequence,
     set_live_barline,
     set_live_key_signature,
     set_live_tempo,
+    set_live_time_signature,
     transpose_passage,
     undo_last_action,
 )
@@ -62,6 +66,10 @@ GUARDED_TOOLS: list[ToolCall] = [
     (set_live_tempo, (1, 100)),
     (transpose_passage, (1, 1, 0, 1)),
     (undo_last_action, ()),
+    (set_live_time_signature, (1, 4, 4)),
+    (append_live_measures, (1,)),
+    (add_live_notes, (1, 0, [{"pitch": 60}])),
+    (process_live_sequence, ([{"action": "ping"}],)),
 ]
 
 
@@ -277,6 +285,114 @@ async def test_undo_last_action_tool(
 
     after = await snapshot("tool-undo-after")
     assert mxl.diff_snapshots(before, after) == {}
+
+
+async def test_set_live_time_signature_tool(
+    bridge: MuseScoreBridge, scratch: ScratchFn, snapshot: SnapshotFn
+) -> None:
+    start, _ = await scratch(1)
+    before = await snapshot("tool-timesig-before")
+    reply = json.loads(await set_live_time_signature(start, 6, 8))
+    assert "error" not in reply, f"tool failed: {reply}"
+
+    after = await snapshot("tool-timesig-after")
+    changes = mxl.diff_snapshots(before, after)
+    assert changes[f"s0m{start}"]["after"].get("time") == ["6/8"]
+
+
+async def test_append_live_measures_tool(bridge: MuseScoreBridge) -> None:
+    info = json.loads(await get_live_score_info())
+    count = int(info["result"]["measureCount"])
+    reply = json.loads(await append_live_measures(2))
+    assert reply.get("result", {}).get("totalMeasures") == count + 2
+
+    reply = json.loads(await append_live_measures(0))
+    assert "error" in reply
+
+
+async def test_add_live_notes_tool(
+    bridge: MuseScoreBridge, scratch: ScratchFn, snapshot: SnapshotFn
+) -> None:
+    start, _ = await scratch(1)
+    before = await snapshot("tool-addnotes-before")
+
+    notes = [
+        {"pitch": 60},
+        {"pitch": 62},
+        {"pitch": 64, "numerator": 1, "denominator": 2},
+    ]
+    reply = json.loads(await add_live_notes(start, 0, notes))
+    assert "error" not in reply, f"add_live_notes failed: {reply}"
+
+    after = await snapshot("tool-addnotes-after")
+    changes = mxl.diff_snapshots(before, after)
+    assert set(changes) == {f"s0m{start}"}, f"unexpected delta: {set(changes)}"
+    events = [
+        e for e in changes[f"s0m{start}"]["after"]["events"] if e["kind"] != "rest"
+    ]
+    assert [(e["offset"], e["midi"]) for e in events] == [
+        (0.0, [60]),
+        (1.0, [62]),
+        (2.0, [64]),
+    ], f"unexpected note run: {events}"
+
+
+async def test_add_live_notes_validates_input(bridge: MuseScoreBridge) -> None:
+    reply = json.loads(await add_live_notes(1, 0, []))
+    assert "non-empty" in reply["error"]
+
+    reply = json.loads(await add_live_notes(1, 0, [{"pitch": 200}]))
+    assert "0-127" in reply["error"]
+
+    reply = json.loads(await add_live_notes(1, -1, [{"pitch": 60}]))
+    assert "staff" in reply["error"]
+
+
+async def test_process_live_sequence_tool(
+    bridge: MuseScoreBridge, scratch: ScratchFn, snapshot: SnapshotFn
+) -> None:
+    start, _ = await scratch(1)
+    before = await snapshot("tool-seq-before")
+
+    steps = [
+        {"action": "goToStaff", "params": {"staff": 0}},
+        {"action": "goToMeasure", "params": {"measure": start}},
+        {"action": "addNote", "params": {"pitch": 65, "duration": QUARTER}},
+        {"action": "addRehearsalMark", "params": {"text": "SEQ-T"}},
+    ]
+    reply = json.loads(await process_live_sequence(steps))
+    assert "error" not in reply, f"process_live_sequence failed: {reply}"
+
+    after = await snapshot("tool-seq-after")
+    changes = mxl.diff_snapshots(before, after)
+    assert f"s0m{start}" in changes
+    measure_after = changes[f"s0m{start}"]["after"]
+    note_midis = [e["midi"] for e in measure_after["events"] if e["kind"] != "rest"]
+    assert [65] in note_midis
+    assert measure_after.get("rehearsal") == ["SEQ-T"]
+
+
+async def test_process_live_sequence_rejects_crashing_actions(
+    bridge: MuseScoreBridge,
+) -> None:
+    reply = json.loads(
+        await process_live_sequence(
+            [{"action": "setBarline", "params": {"type": "double"}}]
+        )
+    )
+    assert "error" in reply
+    assert "crashes MuseScore" in reply["error"]
+
+
+async def test_crash_guarded_tools_refuse_musescore(
+    bridge: MuseScoreBridge,
+) -> None:
+    """set_live_barline/add_live_chord_symbol must refuse to run against
+    MuseScore instead of killing it."""
+    for coro in (set_live_barline(1, "double"), add_live_chord_symbol(1, "C")):
+        reply = json.loads(await coro)
+        assert "error" in reply
+        assert "crashes MuseScore" in reply["error"]
 
 
 # ── Connection churn (kept last; each test restores the connection) ──

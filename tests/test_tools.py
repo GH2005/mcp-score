@@ -586,6 +586,152 @@ class TestExportLiveScore:
         assert "install-plugin" in result["error"]
 
 
+class TestCompositionTools:
+    @pytest.mark.anyio()
+    async def test_tools_require_musescore(self) -> None:
+        # Arrange
+        from mcp_score.tools.manipulation import (
+            add_live_notes,
+            append_live_measures,
+            process_live_sequence,
+            set_live_time_signature,
+        )
+
+        mock_bridge = AsyncMock()
+        mock_bridge.is_connected = True
+        mock_bridge.application_name = "Dorico"
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            for coro in (
+                set_live_time_signature(1, 4, 4),
+                append_live_measures(1),
+                add_live_notes(1, 0, [{"pitch": 60}]),
+                process_live_sequence([{"action": "ping"}]),
+            ):
+                # Act
+                result = json.loads(await coro)
+
+                # Assert
+                assert "only supported with MuseScore" in result["error"]
+
+    @pytest.mark.anyio()
+    async def test_set_time_signature_validates_values(self) -> None:
+        # Arrange
+        from mcp_score.tools.manipulation import set_live_time_signature
+
+        mock_bridge = AsyncMock(spec=MuseScoreBridge)
+        mock_bridge.is_connected = True
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            # Act
+            result = json.loads(await set_live_time_signature(1, 0, 4))
+
+        # Assert
+        assert "must be >= 1" in result["error"]
+
+    @pytest.mark.anyio()
+    async def test_append_measures_delegates(self) -> None:
+        # Arrange
+        from mcp_score.tools.manipulation import append_live_measures
+
+        mock_bridge = AsyncMock(spec=MuseScoreBridge)
+        mock_bridge.is_connected = True
+        mock_bridge.append_measures = AsyncMock(
+            return_value={"result": {"count": 2, "totalMeasures": 34}}
+        )
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            # Act
+            result = json.loads(await append_live_measures(2))
+
+        # Assert
+        assert result["result"]["totalMeasures"] == 34
+        mock_bridge.append_measures.assert_called_once_with(2)
+
+    @pytest.mark.anyio()
+    async def test_add_live_notes_builds_sequence_steps(self) -> None:
+        # Arrange
+        from mcp_score.tools.manipulation import add_live_notes
+
+        mock_bridge = AsyncMock(spec=MuseScoreBridge)
+        mock_bridge.is_connected = True
+        mock_bridge.process_sequence = AsyncMock(
+            return_value={"result": {"results": [], "count": 4}}
+        )
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            # Act
+            result = json.loads(
+                await add_live_notes(
+                    3, 1, [{"pitch": 60}, {"pitch": 64, "denominator": 2}]
+                )
+            )
+
+        # Assert
+        assert "error" not in result
+        steps = mock_bridge.process_sequence.call_args.args[0]
+        assert steps[0] == {"action": "goToStaff", "params": {"staff": 1}}
+        assert steps[1] == {"action": "goToMeasure", "params": {"measure": 3}}
+        assert steps[2]["params"]["pitch"] == 60
+        assert steps[2]["params"]["duration"] == {"numerator": 1, "denominator": 4}
+        assert steps[3]["params"]["duration"] == {"numerator": 1, "denominator": 2}
+
+    @pytest.mark.anyio()
+    async def test_add_live_notes_rejects_bad_pitch(self) -> None:
+        # Arrange
+        from mcp_score.tools.manipulation import add_live_notes
+
+        mock_bridge = AsyncMock(spec=MuseScoreBridge)
+        mock_bridge.is_connected = True
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            # Act
+            result = json.loads(await add_live_notes(1, 0, [{"pitch": 128}]))
+
+        # Assert
+        assert "0-127" in result["error"]
+        mock_bridge.process_sequence.assert_not_called()
+
+    @pytest.mark.anyio()
+    async def test_process_sequence_rejects_crashing_actions(self) -> None:
+        # Arrange
+        from mcp_score.tools.manipulation import process_live_sequence
+
+        mock_bridge = AsyncMock(spec=MuseScoreBridge)
+        mock_bridge.is_connected = True
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            # Act
+            result = json.loads(await process_live_sequence([{"action": "addDynamic"}]))
+
+        # Assert
+        assert "crashes MuseScore" in result["error"]
+        mock_bridge.process_sequence.assert_not_called()
+
+
+class TestCrashGuards:
+    @pytest.mark.anyio()
+    async def test_barline_and_chord_symbol_refuse_musescore(self) -> None:
+        # Arrange
+        from mcp_score.tools.manipulation import (
+            add_live_chord_symbol,
+            set_live_barline,
+        )
+
+        mock_bridge = AsyncMock(spec=MuseScoreBridge)
+        mock_bridge.is_connected = True
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            for coro in (set_live_barline(1, "double"), add_live_chord_symbol(1, "C")):
+                # Act
+                result = json.loads(await coro)
+
+                # Assert
+                assert "crashes MuseScore" in result["error"]
+        mock_bridge.set_barline.assert_not_called()
+        mock_bridge.add_chord_symbol.assert_not_called()
+
+
 class TestGetSelectionProperties:
     @pytest.mark.anyio()
     async def test_get_properties_without_connection_returns_error(self) -> None:
