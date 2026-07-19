@@ -73,3 +73,10 @@ reportUnknownArgumentType = "warning"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Live tests need a running MuseScore with the bridge plugin; they are
+# excluded by default (CI, pre-push) and selected with `pytest -m live`
+# (a command-line -m overrides the one in addopts).
+addopts = "-m 'not live'"
+markers = [
+    "live: requires a running MuseScore instance with the mcp-score-bridge plugin serving ws://localhost:8765",
+]
