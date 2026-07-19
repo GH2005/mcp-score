@@ -1,6 +1,6 @@
 """Tests for the MuseScore WebSocket bridge client."""
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import websockets.exceptions
@@ -66,8 +66,13 @@ class TestMuseScoreBridgeReconnect:
             side_effect=websockets.exceptions.ConnectionClosed(None, None)
         )
 
-        # Act — connect will fail since no server is running
-        result = await bridge.send_command("ping")
+        # Act — force the reconnect attempt to fail regardless of whether a
+        # real MuseScore instance happens to be listening on localhost:8765
+        with patch(
+            "mcp_score.bridge.musescore.websockets.connect",
+            side_effect=OSError("connection refused"),
+        ):
+            result = await bridge.send_command("ping")
 
         # Assert
         assert "error" in result
