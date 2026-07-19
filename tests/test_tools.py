@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -545,26 +546,23 @@ class TestExportLiveScore:
         assert "absolute" in result["error"]
 
     @pytest.mark.anyio()
-    async def test_export_happy_path_returns_target(self) -> None:
+    async def test_export_happy_path_returns_target(self, tmp_path: Path) -> None:
         # Arrange
         from mcp_score.tools.analysis import export_live_score
 
+        target = (tmp_path / "snapshot.musicxml").as_posix()
         mock_bridge = AsyncMock(spec=MuseScoreBridge)
         mock_bridge.is_connected = True
         mock_bridge.export_score = AsyncMock(return_value={"result": {"written": True}})
 
         with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
             # Act
-            result = json.loads(
-                await export_live_score(path="C:/tmp/snapshot.musicxml")
-            )
+            result = json.loads(await export_live_score(path=target))
 
         # Assert
         assert result["success"] is True
-        assert result["path"] == "C:/tmp/snapshot.musicxml"
-        mock_bridge.export_score.assert_called_once_with(
-            "C:/tmp/snapshot.musicxml", "musicxml"
-        )
+        assert result["path"] == target
+        mock_bridge.export_score.assert_called_once_with(target, "musicxml")
 
     @pytest.mark.anyio()
     async def test_export_outdated_plugin_returns_hint(self) -> None:
