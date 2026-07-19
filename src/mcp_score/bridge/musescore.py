@@ -228,6 +228,18 @@ class MuseScoreBridge(ScoreBridge):
         """Execute a sequence of commands atomically."""
         return await self.send_command("processSequence", {"sequence": commands})
 
+    async def export_score(
+        self, path: str, export_format: str = "musicxml"
+    ) -> dict[str, Any]:
+        """Snapshot the live in-memory score to disk via the plugin.
+
+        Captures unsaved edits without touching the user's own file. The
+        path should be absolute with forward slashes.
+        """
+        return await self.send_command(
+            "exportScore", {"path": path, "format": export_format}
+        )
+
     async def undo(self) -> dict[str, Any]:
         """Undo the last action."""
         return await self.send_command("undo")

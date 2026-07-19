@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from mcp_score.tools.analysis import (
+    export_live_score,
     get_measure_content,
     get_selection_properties,
     read_passage,
@@ -100,12 +101,6 @@ async def test_get_selection_properties_returns_cursor_info(
     assert set(reply["result"]) >= {"measure", "staff", "beat", "tick"}
 
 
-@pytest.mark.xfail(
-    reason="read_passage walks the cursor and reports only the first "
-    "element of each measure (chords/voices/later beats are invisible). "
-    "Rewrite onto exportScore + music21 planned (PR3).",
-    strict=True,
-)
 async def test_read_passage_reports_full_measure_content(
     bridge: MuseScoreBridge, scratch: ScratchFn
 ) -> None:
@@ -135,12 +130,6 @@ async def test_read_passage_reports_full_measure_content(
     )
 
 
-@pytest.mark.xfail(
-    reason="get_measure_content returns only {measure, staff} -- the "
-    "selectCurrentMeasure reply carries no musical content at all. "
-    "Rewrite onto exportScore + music21 planned (PR3).",
-    strict=True,
-)
 async def test_get_measure_content_reports_notes(
     bridge: MuseScoreBridge, scratch: ScratchFn
 ) -> None:
@@ -154,6 +143,44 @@ async def test_get_measure_content_reports_notes(
     assert "62" in content, (
         f"measure content does not include the D4 that was written: {reply}"
     )
+
+
+async def test_export_live_score_default_path(bridge: MuseScoreBridge) -> None:
+    from pathlib import Path
+
+    reply = json.loads(await export_live_score())
+    assert reply.get("success") is True, f"export_live_score failed: {reply}"
+    exported = Path(reply["path"])
+    assert exported.exists() and exported.stat().st_size > 0
+    snap = mxl.parse_snapshot(exported)
+    assert snap["measure_count"] >= 1
+    exported.unlink()
+
+
+async def test_export_live_score_explicit_path(bridge: MuseScoreBridge) -> None:
+    from tests.live.conftest import ARTIFACTS_DIR
+
+    ARTIFACTS_DIR.mkdir(exist_ok=True)
+    target = ARTIFACTS_DIR / "tool-export.musicxml"
+    reply = json.loads(await export_live_score(path=str(target)))
+    assert reply.get("success") is True, f"export_live_score failed: {reply}"
+    assert target.exists() and target.stat().st_size > 0
+
+
+async def test_export_live_score_rejects_mscz_and_bad_input(
+    bridge: MuseScoreBridge,
+) -> None:
+    reply = json.loads(await export_live_score(format="mscz"))
+    assert "error" in reply
+    assert "broken" in reply["error"]
+
+    reply = json.loads(await export_live_score(format="bogus"))
+    assert "error" in reply
+    assert "format must be one of" in reply["error"]
+
+    reply = json.loads(await export_live_score(path="relative/out.musicxml"))
+    assert "error" in reply
+    assert "absolute" in reply["error"]
 
 
 async def test_add_live_rehearsal_mark_tool(
