@@ -136,31 +136,31 @@ The plugin accepts JSON messages over WebSocket. Each message must have a `comma
 
 ### Selection and transformation
 
-| Command                | Params                                             | Description                                                                                    |
-| ---------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `selectCurrentMeasure` | none                                               | Select all elements in the measure at the cursor. (Unreliable in MuseScore 4: the selection stays empty.) |
-| `selectCustomRange`    | `{startMeasure, endMeasure, startStaff, endStaff}` | Select a range. Measures are 1-indexed (inclusive). Staves are 0-indexed (inclusive). (Unreliable in MuseScore 4.) |
+| Command                | Params                                                            | Description                                                                                                           |
+| ---------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `selectCurrentMeasure` | none                                                              | Select all elements in the measure at the cursor. (Unreliable in MuseScore 4: the selection stays empty.)             |
+| `selectCustomRange`    | `{startMeasure, endMeasure, startStaff, endStaff}`                | Select a range. Measures are 1-indexed (inclusive). Staves are 0-indexed (inclusive). (Unreliable in MuseScore 4.)    |
 | `transpose`            | `{semitones, startMeasure?, endMeasure?, startStaff?, endStaff?}` | Transpose by semitones (positive = up). **Use the ranged form**; the selection-based form cannot work in MuseScore 4. |
 
 ### Undo
 
-| Command | Params | Description           |
-| ------- | ------ | --------------------- |
+| Command | Params | Description                                                                     |
+| ------- | ------ | ------------------------------------------------------------------------------- |
 | `undo`  | none   | Undo the last action. (Broken in MuseScore 4.7.4: reports ok but does nothing.) |
 
 ### Batch operations
 
-| Command           | Params                                | Description                                                                                                |
-| ----------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Command           | Params                                | Description                                                                                                                       |
+| ----------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `processSequence` | `{sequence: [{action, params}, ...]}` | Execute multiple commands in a single undo group. (Rollback on failure is broken in MuseScore 4.7.4: earlier steps stay applied.) |
 
 ### Snapshots and diagnostics (added in 0.2.0)
 
-| Command       | Params                                       | Description                                                                                    |
-| ------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `exportScore` | `{path: string, format?: string}`            | Write the live in-memory score to an absolute path. Default/recommended format `musicxml`; `mscz` is rejected (broken in 4.7.4). The ground-truth read path. |
-| `newScore`    | `{title?, measures?}`                        | Creates a score, but in a window the bridge cannot control (MuseScore 4 limitation) -- avoid.  |
-| `apiProbe`    | none                                         | Runtime introspection of the plugin API (diagnostic).                                          |
+| Command       | Params                            | Description                                                                                                                                                  |
+| ------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `exportScore` | `{path: string, format?: string}` | Write the live in-memory score to an absolute path. Default/recommended format `musicxml`; `mscz` is rejected (broken in 4.7.4). The ground-truth read path. |
+| `newScore`    | `{title?, measures?}`             | Creates a score, but in a window the bridge cannot control (MuseScore 4 limitation) -- avoid.                                                                |
+| `apiProbe`    | none                              | Runtime introspection of the plugin API (diagnostic).                                                                                                        |
 
 The marking commands `setBarline`, `addChordSymbol`, and `addDynamic` crash MuseScore Studio 4.7.4 and require `__experimental: true`; `setKeySignature` and `setTempo` insert corrupt elements there. See [agent-playbook.md](agent-playbook.md).
 

@@ -47,34 +47,34 @@ internally, so their output is trustworthy.
 
 ### Works — verified live
 
-| Surface | Notes |
-|---|---|
-| `ping_score_app`, `get_live_score_info` | `getScore` reply carries `pluginVersion` (stale-plugin detection), `measureCount`, key/time signature, parts with staff ranges (derived from tracks). |
-| `export_live_score(path?, format="musicxml")` | The ground-truth snapshot. Rejects `mscz` (see limitations), relative paths, unknown formats. |
-| `read_passage(start, end, staff?)` | Accurate: export + parse. Reports every note, chord, rest, voice, and annotation per measure/staff. |
-| `get_measure_content(measure, staff=0)` | Accurate: export + parse. |
-| `get_selection_properties` | Cursor info only (measure/staff/beat/tick + element under cursor). |
-| `add_live_notes(measure, staff, notes)` | The reliable note-entry path: writes a consecutive run atomically via `processSequence`. Notes replace existing content at those beats and spill into following measures. `{"pitch": 0-127, "numerator": 1, "denominator": 4}` per note. |
-| `process_live_sequence(steps)` | Batch of wire actions in one command group. Rejects crash/corruption actions. **Rollback on failure does not work** (undo is broken): earlier steps stay applied. |
-| `add_live_rehearsal_mark(measure, text)` | Verified in export. |
-| `set_live_time_signature(measure, num, den)` | Verified in export; re-bars from that measure onward; may add a courtesy signature to the previous measure. |
-| `append_live_measures(count)` | Verified in export. |
-| `transpose_passage(start, end, staff, semitones)` | Reimplemented note-by-note with correct enharmonic spelling (tpc math). Sends the single ranged `transpose` message. |
-| Wire navigation: `goToMeasure` (1-indexed), `goToStaff` (0-indexed) | Bounds-checked. Staff persists across commands; always set it explicitly. |
-| Wire `addNote` | Consecutive calls accumulate (the plugin tracks the intra-measure tick). `goToMeasure`/`goToStaff` reset the position to the measure start. Pitch validated 0–127. |
-| Wire `getCursorInfo` | Beat computed via `measure.timesigActual`; note names derived from tpc+pitch (e.g. `"C4"`, `"Eb3"`). Reports only the element under the cursor — use the export path for full content. |
-| Wire `apiProbe` | Runtime introspection of the plugin API (diagnostic). |
+| Surface                                                             | Notes                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ping_score_app`, `get_live_score_info`                             | `getScore` reply carries `pluginVersion` (stale-plugin detection), `measureCount`, key/time signature, parts with staff ranges (derived from tracks).                                                                                    |
+| `export_live_score(path?, format="musicxml")`                       | The ground-truth snapshot. Rejects `mscz` (see limitations), relative paths, unknown formats.                                                                                                                                            |
+| `read_passage(start, end, staff?)`                                  | Accurate: export + parse. Reports every note, chord, rest, voice, and annotation per measure/staff.                                                                                                                                      |
+| `get_measure_content(measure, staff=0)`                             | Accurate: export + parse.                                                                                                                                                                                                                |
+| `get_selection_properties`                                          | Cursor info only (measure/staff/beat/tick + element under cursor).                                                                                                                                                                       |
+| `add_live_notes(measure, staff, notes)`                             | The reliable note-entry path: writes a consecutive run atomically via `processSequence`. Notes replace existing content at those beats and spill into following measures. `{"pitch": 0-127, "numerator": 1, "denominator": 4}` per note. |
+| `process_live_sequence(steps)`                                      | Batch of wire actions in one command group. Rejects crash/corruption actions. **Rollback on failure does not work** (undo is broken): earlier steps stay applied.                                                                        |
+| `add_live_rehearsal_mark(measure, text)`                            | Verified in export.                                                                                                                                                                                                                      |
+| `set_live_time_signature(measure, num, den)`                        | Verified in export; re-bars from that measure onward; may add a courtesy signature to the previous measure.                                                                                                                              |
+| `append_live_measures(count)`                                       | Verified in export.                                                                                                                                                                                                                      |
+| `transpose_passage(start, end, staff, semitones)`                   | Reimplemented note-by-note with correct enharmonic spelling (tpc math). Sends the single ranged `transpose` message.                                                                                                                     |
+| Wire navigation: `goToMeasure` (1-indexed), `goToStaff` (0-indexed) | Bounds-checked. Staff persists across commands; always set it explicitly.                                                                                                                                                                |
+| Wire `addNote`                                                      | Consecutive calls accumulate (the plugin tracks the intra-measure tick). `goToMeasure`/`goToStaff` reset the position to the measure start. Pitch validated 0–127.                                                                       |
+| Wire `getCursorInfo`                                                | Beat computed via `measure.timesigActual`; note names derived from tpc+pitch (e.g. `"C4"`, `"Eb3"`). Reports only the element under the cursor — use the export path for full content.                                                   |
+| Wire `apiProbe`                                                     | Runtime introspection of the plugin API (diagnostic).                                                                                                                                                                                    |
 
 ### Broken in MuseScore 4.7.4 — guarded, do not attempt to bypass
 
-| Surface | Failure mode | Guard |
-|---|---|---|
-| `setBarline`, `addChordSymbol`, `addDynamic` | **Crash MuseScore outright** (process death; `newElement` + `cursor.add` is fatal for these element types). | Tools refuse; wire commands require `__experimental: true`; `process_live_sequence` rejects the actions. |
-| `setKeySignature`, `setTempo` | **Silently insert corrupt elements**: every inserted key signature exports as `fifths=-8` regardless of the value written; tempo marks export with no text and no number. The clone made by `cursor.add` loses the assigned values; re-assigning after insertion does not help. (`setTimeSignature` and rehearsal marks use the same pattern and work — the MS4 API port is that inconsistent.) | Tools refuse; `process_live_sequence` rejects the actions. |
-| `undo` (and `processSequence` rollback) | `cmd("undo")` is a **silent no-op** from the dock-plugin context: the reply says ok, the edit stays. | None (reply is honest-looking but useless). Never rely on undo; verify with exports and fix mistakes with explicit edits. |
-| Selection-based transposition | `selection.selectRange` does not produce an active selection (elements stays empty), with or without a command group. | Use the ranged `transpose` parameters instead. |
-| `newScore` | Creates the score in a window this bridge cannot control; `curScore` never switches to it. | Not exposed as a tool. |
-| `exportScore` with `format: "mscz"` | writeScore writes a 0-byte file, never replies, and raises a **blocking modal dialog** the user must dismiss by hand. | Rejected at both the tool and the plugin level. |
+| Surface                                      | Failure mode                                                                                                                                                                                                                                                                                                                                                                                    | Guard                                                                                                                     |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `setBarline`, `addChordSymbol`, `addDynamic` | **Crash MuseScore outright** (process death; `newElement` + `cursor.add` is fatal for these element types).                                                                                                                                                                                                                                                                                     | Tools refuse; wire commands require `__experimental: true`; `process_live_sequence` rejects the actions.                  |
+| `setKeySignature`, `setTempo`                | **Silently insert corrupt elements**: every inserted key signature exports as `fifths=-8` regardless of the value written; tempo marks export with no text and no number. The clone made by `cursor.add` loses the assigned values; re-assigning after insertion does not help. (`setTimeSignature` and rehearsal marks use the same pattern and work — the MS4 API port is that inconsistent.) | Tools refuse; `process_live_sequence` rejects the actions.                                                                |
+| `undo` (and `processSequence` rollback)      | `cmd("undo")` is a **silent no-op** from the dock-plugin context: the reply says ok, the edit stays.                                                                                                                                                                                                                                                                                            | None (reply is honest-looking but useless). Never rely on undo; verify with exports and fix mistakes with explicit edits. |
+| Selection-based transposition                | `selection.selectRange` does not produce an active selection (elements stays empty), with or without a command group.                                                                                                                                                                                                                                                                           | Use the ranged `transpose` parameters instead.                                                                            |
+| `newScore`                                   | Creates the score in a window this bridge cannot control; `curScore` never switches to it.                                                                                                                                                                                                                                                                                                      | Not exposed as a tool.                                                                                                    |
+| `exportScore` with `format: "mscz"`          | writeScore writes a 0-byte file, never replies, and raises a **blocking modal dialog** the user must dismiss by hand.                                                                                                                                                                                                                                                                           | Rejected at both the tool and the plugin level.                                                                           |
 
 ### Not available on this machine
 
@@ -104,11 +104,11 @@ uv run --project <repo> pytest -m live tests/live -q
 
 ## Restart matrix
 
-| You changed | Redeploy | Restart needed |
-|---|---|---|
-| `plugin.qml` | `mcp-score install-plugin` | MuseScore restart + relaunch the plugin dock. Confirm with `getScore` → `pluginVersion`. |
-| Python source, exercised via the live suite | nothing (`uv run --project` uses the source tree) | none |
-| Python source, exercised via an MCP client | reinstall/refresh however the client launches the server | restart the MCP client (e.g. Claude Code) |
+| You changed                                 | Redeploy                                                 | Restart needed                                                                           |
+| ------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `plugin.qml`                                | `mcp-score install-plugin`                               | MuseScore restart + relaunch the plugin dock. Confirm with `getScore` → `pluginVersion`. |
+| Python source, exercised via the live suite | nothing (`uv run --project` uses the source tree)        | none                                                                                     |
+| Python source, exercised via an MCP client  | reinstall/refresh however the client launches the server | restart the MCP client (e.g. Claude Code)                                                |
 
 ## Gotchas learned the hard way
 
