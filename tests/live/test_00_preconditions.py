@@ -55,13 +55,6 @@ async def test_get_score_reports_plugin_version(
     assert reply["result"].get("pluginVersion") == "0.2.0"
 
 
-@pytest.mark.xfail(
-    reason="Part.startStaff/endStaff are undefined in MuseScore 4.7.4's "
-    "plugin API (MuseScore 3 properties); JSON.stringify drops them, so "
-    "getScore parts carry only 'name'. Probing startTrack/endTrack as a "
-    "replacement (apiProbe).",
-    strict=True,
-)
 async def test_get_score_parts_include_staff_ranges(
     bridge: MuseScoreBridge,
 ) -> None:

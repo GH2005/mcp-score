@@ -757,6 +757,10 @@ MuseScore {
             var keySig = newElement(Element.KEYSIG);
             keySig.key = fifths;
             cursor.add(keySig);
+            // cursor.add may clone or reset the element in MuseScore 4
+            // (inserted key signatures export as -8 regardless of the
+            // value written before add); re-assign after insertion.
+            keySig.key = fifths;
             postAddKey = keySig.key;
         } finally {
             curScore.endCmd();
@@ -832,6 +836,11 @@ MuseScore {
             tempo.tempo = bpm / secondsPerMinute;
             tempo.followText = false;
             cursor.add(tempo);
+            // Re-assign after insertion: inserted TEMPO_TEXT exports with
+            // empty text/tempo when only set before cursor.add.
+            tempo.text = displayText;
+            tempo.tempo = bpm / secondsPerMinute;
+            tempo.followText = false;
             postAdd = { text: tempo.text, tempo: tempo.tempo };
         } finally {
             curScore.endCmd();

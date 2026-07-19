@@ -208,8 +208,12 @@ async def test_set_key_signature_out_of_range_returns_error(
 async def test_set_time_signature(
     bridge: MuseScoreBridge, scratch: ScratchFn, snapshot: SnapshotFn
 ) -> None:
-    start, _ = await scratch(1)
-    await _at(bridge, start)
+    # Three scratch measures with the signature on the middle one, so
+    # courtesy-signature side effects on neighbours stay inside the
+    # scratch window even when earlier runs left signatures nearby.
+    start, end = await scratch(3)
+    target = start + 1
+    await _at(bridge, target)
     before = await snapshot("timesig-before")
 
     reply = await bridge.set_time_signature(3, 4)
@@ -218,16 +222,14 @@ async def test_set_time_signature(
     after = await snapshot("timesig-after")
     changes = mxl.diff_snapshots(before, after)
     assert changes, "setTimeSignature produced no change"
-    # Time signature changes may re-bar; the scratch measure sits at the
-    # score tail so every change must be at start-1 (courtesy) or later.
     for change_key in changes:
         if change_key == "measure_count":
             continue
-        assert mxl.measure_of_key(change_key) >= start - 1, (
+        assert mxl.measure_of_key(change_key) >= start, (
             f"delta leaked before the scratch range: {set(changes)}"
         )
-    assert changes[f"s0m{start}"]["after"].get("time") == ["3/4"]
-    events = changes[f"s0m{start}"]["after"]["events"]
+    assert changes[f"s0m{target}"]["after"].get("time") == ["3/4"]
+    events = changes[f"s0m{target}"]["after"]["events"]
     assert sum(e["ql"] for e in events) == pytest.approx(3.0)
 
 
