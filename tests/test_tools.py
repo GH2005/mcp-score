@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -14,6 +14,9 @@ from mcp_score.tools import (
     check_measure,
     connected_bridge,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _write_fixture_musicxml(path: str) -> dict[str, object]:
