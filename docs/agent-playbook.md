@@ -30,7 +30,7 @@ MCP tool  →  ScoreBridge (Python)  →  ws://localhost:8765  →  plugin.qml  
 1. Snapshot the live score (captures unsaved edits, works on never-saved
    scores, does not touch the user's file): call the `export_live_score`
    tool, or send `{"command": "exportScore", "params": {"path":
-   "C:/abs/path/out.musicxml", "format": "musicxml"}}`.
+"C:/abs/path/out.musicxml", "format": "musicxml"}}`.
 2. Parse the MusicXML (`mcp_score.musicxml.parse_snapshot`) and/or
    render it with MuseScore's CLI for a visual check
    (`MuseScore4.exe <in> -o <out>.png -r 130 --force`; works while the
