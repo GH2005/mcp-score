@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - CLI install commands: `mcp-score install-skill`, `mcp-score install-plugin`
 - Comprehensive test suite (145 tests)
 - Full documentation (architecture, reference, getting-started)
-- GitHub security: CodeQL scanning, branch protection, SECURITY.md
+- GitHub security: CodeQL scanning, branch protection
 - Score metadata: subtitle (movementName), arranger (Contributor), copyright support
 - Prompt request PR workflow in CONTRIBUTING.md
 

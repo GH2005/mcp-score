@@ -8,31 +8,42 @@ The MuseScore plugin runs inside MuseScore 4 and opens a WebSocket server on `lo
 
 The plugin is only needed for **manipulation** and **analysis** tools (reading passages, arranging, transposing, etc.). **Generation** tools work without it -- they produce MusicXML files that MuseScore can open directly.
 
+Plugin 0.2.0 adds `exportScore` (ground-truth score snapshots), a ranged `transpose`, and `apiProbe`, and gates the commands that crash or corrupt MuseScore Studio 4.7.4. See [agent-playbook.md](agent-playbook.md) for the **verified support matrix** and correct usage pattern of every command -- read it before driving the bridge.
+
 ## Prerequisites
 
-- MuseScore 4 (4.0 or later)
-- QtWebSockets support (included in standard MuseScore 4 builds)
+- MuseScore 4 (4.0 or later). The plugin uses MuseScore's native
+  `api.websocketserver`; the QtWebSockets QML module is NOT available in
+  MuseScore 4's plugin runtime.
 
 ## Installation
 
-1. Locate your MuseScore plugins directory:
-   - **macOS:** `~/Library/Application Support/MuseScore4/Plugins/`
-   - **Linux:** `~/.local/share/MuseScore4/Plugins/`
-   - **Windows:** `%APPDATA%/MuseScore4/Plugins/`
+The easiest way is the installer, which copies the plugin to the right
+place on every OS:
+
+```bash
+mcp-score install-plugin
+```
+
+To install manually instead:
+
+1. Locate your MuseScore plugins directory (MuseScore 4 uses the
+   Documents folder on every OS):
+   - **macOS / Linux / Windows:** `~/Documents/MuseScore4/Plugins/`
 
 2. Copy the plugin file:
 
    ```bash
-   # macOS
-   cp src/mcp_score/musescore/plugin.qml ~/Library/Application\ Support/MuseScore4/Plugins/mcp-score-bridge.qml
-
-   # Linux
-   cp src/mcp_score/musescore/plugin.qml ~/.local/share/MuseScore4/Plugins/mcp-score-bridge.qml
+   cp src/mcp_score/musescore/plugin.qml ~/Documents/MuseScore4/Plugins/mcp-score-bridge.qml
    ```
 
 3. In MuseScore, go to **Plugins > Plugin Manager** and enable "MCP Score Bridge"
 
 4. Run the plugin: **Plugins > MCP Score Bridge**
+
+After replacing the plugin file you must restart MuseScore and run the
+plugin again for the new version to take effect. Verify the running
+version with the `getScore` command: its reply carries `pluginVersion`.
 
 The plugin starts a WebSocket server on port 8765. It runs as a dock plugin (invisible) so it stays active as long as MuseScore is open. The mcp-score Python server connects automatically when you use manipulation or analysis tools.
 
