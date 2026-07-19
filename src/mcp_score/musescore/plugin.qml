@@ -15,11 +15,10 @@
 //   addRehearsalMark, setBarline, setKeySignature, setTimeSignature,
 //   setTempo, addChordSymbol, addDynamic, appendMeasures,
 //   selectCurrentMeasure, selectCustomRange, transpose, undo,
-//   processSequence
+//   processSequence, exportScore
 
 import QtQuick 2.9
 import MuseScore 3.0
-import QtWebSockets 1.0
 
 MuseScore {
     id: root
@@ -80,35 +79,6 @@ MuseScore {
     readonly property var semitoneToDiatonic: [0, 1, 1, 2, 2, 3, 3, 4, 5, 5, 6, 6]
 
     // ===================================================================
-    // WebSocket server
-    // ===================================================================
-
-    WebSocketServer {
-        id: server
-        port: serverPort
-        host: serverHost
-        listen: true
-        name: "mcp-score-bridge"
-
-        onClientConnected: function(webSocket) {
-            console.log(logPrefix, "Client connected");
-            webSocket.onTextMessageReceived.connect(function(message) {
-                var response = handleMessage(message);
-                webSocket.sendTextMessage(JSON.stringify(response));
-            });
-            webSocket.onStatusChanged.connect(function(status) {
-                if (status === WebSocket.Closed) {
-                    console.log(logPrefix, "Client disconnected");
-                }
-            });
-        }
-
-        onErrorStringChanged: {
-            console.log(logPrefix, "Server error:", errorString);
-        }
-    }
-
-    // ===================================================================
     // Internal cursor state
     // ===================================================================
 
@@ -161,6 +131,7 @@ MuseScore {
                 case "transpose":           return handleTranspose(params);
                 case "undo":                return handleUndo();
                 case "processSequence":     return handleProcessSequence(params);
+                case "exportScore":         return handleExportScore(params);
                 default:
                     return { error: "Unknown command: " + command };
             }
@@ -307,6 +278,19 @@ MuseScore {
 
     function handlePing() {
         return { result: "pong" };
+    }
+
+    /// Write a snapshot of the live in-memory score to disk via writeScore().
+    /// Captures unsaved edits without touching the user's own file.
+    /// params: { path: "C:/full/path/out.mscz", format: "mscz" | "musicxml" | ... }
+    function handleExportScore(params) {
+        var scoreErr = requireScore();
+        if (scoreErr) return scoreErr;
+        if (!params.path) return { error: "exportScore requires 'path'" };
+
+        var format = params.format || "mscz";
+        var ok = writeScore(curScore, params.path, format);
+        return { result: { written: ok === true, path: params.path, format: format } };
     }
 
     /// Return metadata about the currently open score.
@@ -861,6 +845,10 @@ MuseScore {
         // Single startCmd/endCmd wraps all steps into one undo group.
         curScore.startCmd("processSequence");
 
+        // Shared cursor threaded across steps so consecutive addNote calls
+        // advance forward instead of each rewinding to the measure start.
+        var seqCursor = positionedCursor();
+
         for (var i = 0; i < sequence.length; i++) {
             var step = sequence[i];
             var action = step.action;
@@ -878,7 +866,11 @@ MuseScore {
 
             var stepResult;
             try {
-                stepResult = executeSequenceStep(action, actionParams);
+                stepResult = executeSequenceStep(action, actionParams, seqCursor);
+                if (stepResult.newCursor) {
+                    seqCursor = stepResult.newCursor;
+                    delete stepResult.newCursor;
+                }
             } catch (e) {
                 curScore.endCmd();
                 cmd("undo");
@@ -911,7 +903,7 @@ MuseScore {
 
     /// Execute a single step within processSequence WITHOUT its own
     /// startCmd/endCmd (the caller manages the undo group).
-    function executeSequenceStep(action, params) {
+    function executeSequenceStep(action, params, cursor) {
         switch (action) {
             case "ping":
                 return { result: "pong" };
@@ -926,7 +918,7 @@ MuseScore {
                 if (measureNum < 1 || measureNum > total)
                     return { error: "Measure " + measureNum + " out of range (1-" + total + ")" };
                 cursorMeasure = measureNum;
-                return { result: { measure: cursorMeasure, staff: cursorStaff } };
+                return { result: { measure: cursorMeasure, staff: cursorStaff }, newCursor: positionedCursor() };
             }
 
             case "goToStaff": {
@@ -938,7 +930,7 @@ MuseScore {
                 if (staffIdx < 0 || staffIdx >= curScore.nstaves)
                     return { error: "Staff " + staffIdx + " out of range (0-" + (curScore.nstaves - 1) + ")" };
                 cursorStaff = staffIdx;
-                return { result: { measure: cursorMeasure, staff: cursorStaff } };
+                return { result: { measure: cursorMeasure, staff: cursorStaff }, newCursor: positionedCursor() };
             }
 
             case "addNote": {
@@ -960,12 +952,11 @@ MuseScore {
                     }
                 }
                 var advance = (params.advanceCursorAfterAction !== false);
-                var noteCursor = positionedCursor();
-                if (!noteCursor) return { error: "Could not position cursor" };
-                noteCursor.setDuration(noteNum, noteDen);
-                noteCursor.addNote(pitch);
+                if (!cursor) return { error: "Could not position cursor" };
+                cursor.setDuration(noteNum, noteDen);
+                cursor.addNote(pitch);
                 if (advance) {
-                    cursorMeasure = measureNumberAtTick(noteCursor.tick);
+                    cursorMeasure = measureNumberAtTick(cursor.tick);
                 }
                 return { result: { pitch: pitch, duration: { numerator: noteNum, denominator: noteDen }, measure: cursorMeasure } };
             }
@@ -1150,6 +1141,13 @@ MuseScore {
 
     onRun: {
         console.log(logPrefix, "Bridge plugin started -- WebSocket server on port", serverPort);
+        api.websocketserver.listen(serverPort, function(clientId) {
+            console.log(logPrefix, "Client connected, id:", clientId);
+            api.websocketserver.onMessage(clientId, function(message) {
+                var response = handleMessage(message);
+                api.websocketserver.send(clientId, JSON.stringify(response));
+            });
+        });
     }
 
     // Minimal invisible UI (required for dock plugin type to keep running).
