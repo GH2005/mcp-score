@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -13,6 +14,39 @@ from mcp_score.tools import (
     check_measure,
     connected_bridge,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+def _write_fixture_musicxml(path: str) -> dict[str, object]:
+    """Write a tiny 2-measure score (C4+E4, then G4) as MusicXML fixture."""
+    from music21 import meter, note, stream
+
+    part = stream.Part()
+    first = stream.Measure(number=1)
+    first.append(meter.TimeSignature("4/4"))
+    first.append(note.Note("C4", quarterLength=1.0))
+    first.append(note.Note("E4", quarterLength=1.0))
+    second = stream.Measure(number=2)
+    second.append(note.Note("G4", quarterLength=2.0))
+    part.append(first)
+    part.append(second)
+    score = stream.Score()
+    score.append(part)
+    score.write("musicxml", fp=path)
+    return {"result": {"written": True, "path": path, "format": "musicxml"}}
+
+
+def _musescore_bridge_with_fixture_export() -> AsyncMock:
+    """A MuseScore-typed mock whose export_score writes the fixture score."""
+    mock_bridge = AsyncMock(spec=MuseScoreBridge)
+    mock_bridge.is_connected = True
+    mock_bridge.export_score = AsyncMock(
+        side_effect=lambda path, fmt="musicxml": _write_fixture_musicxml(path)
+    )
+    return mock_bridge
+
 
 # ── Helper tests ─────────────────────────────────────────────────────
 
@@ -291,6 +325,41 @@ class TestReadPassage:
         assert len(result["elements"]) == 3
         assert mock_bridge.go_to_measure.call_count == 3
 
+    @pytest.mark.anyio()
+    async def test_read_passage_musescore_reports_all_notes(self) -> None:
+        # Arrange
+        from mcp_score.tools.analysis import read_passage
+
+        mock_bridge = _musescore_bridge_with_fixture_export()
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            # Act
+            result = json.loads(await read_passage(1, 2, staff=0))
+
+        # Assert
+        assert result["success"] is True
+        assert len(result["elements"]) == 2
+        first_events = result["elements"][0]["staves"]["0"]["events"]
+        midis = [e["midi"] for e in first_events if e["kind"] != "rest"]
+        assert [60] in midis and [64] in midis
+        second_events = result["elements"][1]["staves"]["0"]["events"]
+        second_midis = [e["midi"] for e in second_events if e["kind"] != "rest"]
+        assert [67] in second_midis
+
+    @pytest.mark.anyio()
+    async def test_read_passage_musescore_invalid_staff_returns_error(self) -> None:
+        # Arrange
+        from mcp_score.tools.analysis import read_passage
+
+        mock_bridge = _musescore_bridge_with_fixture_export()
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            # Act
+            result = json.loads(await read_passage(1, 2, staff=5))
+
+        # Assert
+        assert "staff must be one of" in result["error"]
+
 
 class TestReadPassageWithStaff:
     @pytest.mark.anyio()
@@ -356,25 +425,165 @@ class TestGetMeasureContent:
         assert "must be >= 1" in result["error"]
 
     @pytest.mark.anyio()
-    async def test_get_measure_navigates_and_selects(self) -> None:
+    async def test_get_measure_content_musescore_reads_from_export(self) -> None:
+        # Arrange
+        from mcp_score.tools.analysis import get_measure_content
+
+        mock_bridge = _musescore_bridge_with_fixture_export()
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            # Act
+            result = json.loads(await get_measure_content(1, staff=0))
+
+        # Assert
+        assert result["success"] is True
+        events = result["content"]["events"]
+        midis = [e["midi"] for e in events if e["kind"] != "rest"]
+        assert [60] in midis and [64] in midis
+
+    @pytest.mark.anyio()
+    async def test_get_measure_content_out_of_range_returns_error(self) -> None:
+        # Arrange
+        from mcp_score.tools.analysis import get_measure_content
+
+        mock_bridge = _musescore_bridge_with_fixture_export()
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            # Act
+            result = json.loads(await get_measure_content(99))
+
+        # Assert
+        assert "out of range" in result["error"]
+
+    @pytest.mark.anyio()
+    async def test_get_measure_content_outdated_plugin_returns_hint(self) -> None:
         # Arrange
         from mcp_score.tools.analysis import get_measure_content
 
         mock_bridge = AsyncMock(spec=MuseScoreBridge)
         mock_bridge.is_connected = True
-        mock_bridge.go_to_measure = AsyncMock(return_value={"result": "ok"})
-        mock_bridge.go_to_staff = AsyncMock(return_value={"result": "ok"})
-        mock_bridge.send_command = AsyncMock(return_value={"notes": ["C4"]})
+        mock_bridge.export_score = AsyncMock(
+            return_value={"error": "Unknown command: exportScore"}
+        )
 
         with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
             # Act
-            result = json.loads(await get_measure_content(3, staff=1))
+            result = json.loads(await get_measure_content(1))
 
         # Assert
-        mock_bridge.go_to_measure.assert_called_once_with(3)
-        mock_bridge.go_to_staff.assert_called_once_with(1)
-        mock_bridge.send_command.assert_called_once_with("selectCurrentMeasure")
-        assert result["notes"] == ["C4"]
+        assert "install-plugin" in result["error"]
+
+
+class TestExportLiveScore:
+    @pytest.mark.anyio()
+    async def test_export_without_connection_returns_error(self) -> None:
+        # Arrange
+        from mcp_score.tools.analysis import export_live_score
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=None):
+            # Act
+            result = json.loads(await export_live_score())
+
+        # Assert
+        assert "error" in result
+
+    @pytest.mark.anyio()
+    async def test_export_with_non_musescore_bridge_returns_error(self) -> None:
+        # Arrange
+        from mcp_score.tools.analysis import export_live_score
+
+        mock_bridge = AsyncMock()
+        mock_bridge.is_connected = True
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            # Act
+            result = json.loads(await export_live_score())
+
+        # Assert
+        assert "only supported with MuseScore" in result["error"]
+
+    @pytest.mark.anyio()
+    async def test_export_rejects_mscz(self) -> None:
+        # Arrange
+        from mcp_score.tools.analysis import export_live_score
+
+        mock_bridge = AsyncMock(spec=MuseScoreBridge)
+        mock_bridge.is_connected = True
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            # Act
+            result = json.loads(await export_live_score(format="mscz"))
+
+        # Assert
+        assert "broken" in result["error"]
+        mock_bridge.export_score.assert_not_called()
+
+    @pytest.mark.anyio()
+    async def test_export_rejects_unknown_format(self) -> None:
+        # Arrange
+        from mcp_score.tools.analysis import export_live_score
+
+        mock_bridge = AsyncMock(spec=MuseScoreBridge)
+        mock_bridge.is_connected = True
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            # Act
+            result = json.loads(await export_live_score(format="docx"))
+
+        # Assert
+        assert "format must be one of" in result["error"]
+
+    @pytest.mark.anyio()
+    async def test_export_rejects_relative_path(self) -> None:
+        # Arrange
+        from mcp_score.tools.analysis import export_live_score
+
+        mock_bridge = AsyncMock(spec=MuseScoreBridge)
+        mock_bridge.is_connected = True
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            # Act
+            result = json.loads(await export_live_score(path="out.musicxml"))
+
+        # Assert
+        assert "absolute" in result["error"]
+
+    @pytest.mark.anyio()
+    async def test_export_happy_path_returns_target(self, tmp_path: Path) -> None:
+        # Arrange
+        from mcp_score.tools.analysis import export_live_score
+
+        target = (tmp_path / "snapshot.musicxml").as_posix()
+        mock_bridge = AsyncMock(spec=MuseScoreBridge)
+        mock_bridge.is_connected = True
+        mock_bridge.export_score = AsyncMock(return_value={"result": {"written": True}})
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            # Act
+            result = json.loads(await export_live_score(path=target))
+
+        # Assert
+        assert result["success"] is True
+        assert result["path"] == target
+        mock_bridge.export_score.assert_called_once_with(target, "musicxml")
+
+    @pytest.mark.anyio()
+    async def test_export_outdated_plugin_returns_hint(self) -> None:
+        # Arrange
+        from mcp_score.tools.analysis import export_live_score
+
+        mock_bridge = AsyncMock(spec=MuseScoreBridge)
+        mock_bridge.is_connected = True
+        mock_bridge.export_score = AsyncMock(
+            return_value={"error": "Unknown command: exportScore"}
+        )
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            # Act
+            result = json.loads(await export_live_score())
+
+        # Assert
+        assert "install-plugin" in result["error"]
 
 
 class TestGetSelectionProperties:
