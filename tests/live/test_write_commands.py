@@ -52,13 +52,6 @@ async def test_add_note_writes_single_note(
     assert first["ql"] == 1.0
 
 
-@pytest.mark.xfail(
-    reason="The plugin's logical cursor tracks only the measure, not the "
-    "intra-measure position: each addNote command rewinds to beat 1 and "
-    "overwrites the previous note. Fix planned (PR5). Workaround today: "
-    "processSequence, which threads one cursor across steps.",
-    strict=True,
-)
 async def test_add_note_consecutive_notes_accumulate(
     bridge: MuseScoreBridge, scratch: ScratchFn, snapshot: SnapshotFn
 ) -> None:
@@ -81,13 +74,14 @@ async def test_add_note_consecutive_notes_accumulate(
     ], f"expected C4 then E4 as separate beats, got: {notes}"
 
 
-@pytest.mark.skip(
-    reason="cursor.addNote with an invalid pitch may throw between "
-    "startCmd/endCmd, leaving an open command group in MuseScore; unsafe "
-    "to probe until the plugin validates pitch up front (PR5)."
-)
-async def test_add_note_invalid_pitch_returns_error() -> None:
-    pass
+async def test_add_note_invalid_pitch_returns_error(
+    bridge: MuseScoreBridge, scratch: ScratchFn
+) -> None:
+    start, _ = await scratch(1)
+    await _at(bridge, start)
+    reply = await bridge.add_note(200, QUARTER)
+    assert "error" in reply
+    assert "0-127" in reply["error"]
 
 
 async def test_add_rehearsal_mark(
@@ -107,11 +101,9 @@ async def test_add_rehearsal_mark(
 
 
 @pytest.mark.skip(
-    reason="setBarline CRASHES MuseScore Studio 4.7.4 outright (observed "
-    "2026-07-18: the process died the moment setBarline('double') ran; "
-    "every later test got WinError 1225 connection-refused). Adding a "
-    "BAR_LINE element via cursor.add appears fatal in MS4. Re-enable "
-    "after the plugin reimplements setBarline safely (PR5)."
+    reason="setBarline crashes MuseScore Studio 4.7.4 (verified: process "
+    "death). The plugin now refuses it without __experimental=true; this "
+    "mutation test stays skipped until a safe implementation exists."
 )
 @pytest.mark.parametrize(
     ("wire_type", "expected"),
@@ -145,6 +137,25 @@ async def test_set_barline(
         f"barline {expected!r} not found in measure {start}: "
         f"{changes[f's0m{start}']['after']}"
     )
+
+
+async def test_set_barline_without_experimental_flag_is_refused(
+    bridge: MuseScoreBridge, scratch: ScratchFn
+) -> None:
+    """The crasher commands must refuse to run unless explicitly forced."""
+    start, _ = await scratch(1)
+    await _at(bridge, start)
+    reply = await bridge.set_barline("double")
+    assert "error" in reply
+    assert "crashes MuseScore" in reply["error"]
+
+    reply = await bridge.add_chord_symbol("Cmaj7")
+    assert "error" in reply
+    assert "crashes" in reply["error"]
+
+    reply = await bridge.add_dynamic("mf")
+    assert "error" in reply
+    assert "crashes" in reply["error"]
 
 
 async def test_set_barline_unknown_type_returns_error(
@@ -247,9 +258,10 @@ async def test_set_tempo(
 
 
 @pytest.mark.skip(
-    reason="addChordSymbol CRASHES MuseScore Studio 4.7.4 outright "
-    "(observed 2026-07-18: the process died the moment the command ran). "
-    "Re-enable after the plugin reimplements it safely (PR5)."
+    reason="addChordSymbol crashes MuseScore Studio 4.7.4; the plugin now "
+    "refuses it without __experimental=true (gate covered by "
+    "test_set_barline_without_experimental_flag_is_refused). Re-enable "
+    "once a safe implementation exists."
 )
 async def test_add_chord_symbol(
     bridge: MuseScoreBridge, scratch: ScratchFn, snapshot: SnapshotFn
@@ -269,9 +281,10 @@ async def test_add_chord_symbol(
 
 
 @pytest.mark.skip(
-    reason="addDynamic uses the same newElement+cursor.add pattern that "
-    "crashes MuseScore 4.7.4 for BAR_LINE and HARMONY elements; never "
-    "observed alive and considered crash-risk until reimplemented (PR5)."
+    reason="addDynamic shares the crashing newElement+cursor.add pattern; "
+    "the plugin now refuses it without __experimental=true (gate covered "
+    "by test_set_barline_without_experimental_flag_is_refused). Re-enable "
+    "once a safe implementation exists."
 )
 async def test_add_dynamic(
     bridge: MuseScoreBridge, scratch: ScratchFn, snapshot: SnapshotFn

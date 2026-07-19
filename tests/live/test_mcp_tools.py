@@ -220,11 +220,6 @@ async def test_manipulation_tools_validate_measure(
         assert "must be >= 1" in reply["error"]
 
 
-@pytest.mark.xfail(
-    reason="curScore.transpose() does not exist in MuseScore 4.7.4, so "
-    "transpose_passage always fails. Reimplementation planned (PR5).",
-    strict=True,
-)
 async def test_transpose_passage_tool_end_to_end(
     bridge: MuseScoreBridge, scratch: ScratchFn, snapshot: SnapshotFn
 ) -> None:

@@ -16,14 +16,6 @@ pytestmark = pytest.mark.anyio
 
 QUARTER = {"numerator": 1, "denominator": 4}
 
-XFAIL_TRANSPOSE = pytest.mark.xfail(
-    reason="curScore.transpose() does not exist in MuseScore 4.7.4 -- the "
-    "plugin gets \"Property 'transpose' of object Score is not a "
-    'function", so every transposition path is broken. Reimplementation '
-    "planned (PR5).",
-    strict=True,
-)
-
 XFAIL_UNDO = pytest.mark.xfail(
     reason="cmd('undo') is a silent no-op from the dock-plugin context in "
     "MuseScore 4.7.4: the plugin reports ok but the edit stays in the "
@@ -37,7 +29,6 @@ async def _at(bridge: MuseScoreBridge, measure: int, staff: int = 0) -> None:
     assert "result" in await bridge.go_to_measure(measure)
 
 
-@XFAIL_TRANSPOSE
 async def test_select_current_measure_then_transpose(
     bridge: MuseScoreBridge, scratch: ScratchFn, snapshot: SnapshotFn
 ) -> None:
@@ -62,7 +53,6 @@ async def test_select_current_measure_then_transpose(
     assert notes[0]["names"] == ["C#4"], "expected sharp spelling for +1 from C"
 
 
-@XFAIL_TRANSPOSE
 async def test_select_custom_range_then_transpose_confined(
     bridge: MuseScoreBridge, scratch: ScratchFn, snapshot: SnapshotFn
 ) -> None:
@@ -124,7 +114,6 @@ async def test_select_custom_range_invalid_ranges_return_errors(
     assert "Missing required parameters" in reply["error"]
 
 
-@XFAIL_TRANSPOSE
 async def test_transpose_octave_up(
     bridge: MuseScoreBridge, scratch: ScratchFn, snapshot: SnapshotFn
 ) -> None:

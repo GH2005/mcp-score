@@ -15,7 +15,11 @@
 //   addRehearsalMark, setBarline, setKeySignature, setTimeSignature,
 //   setTempo, addChordSymbol, addDynamic, appendMeasures,
 //   selectCurrentMeasure, selectCustomRange, transpose, undo,
-//   processSequence, exportScore
+//   processSequence, exportScore, apiProbe
+//
+// setBarline, addChordSymbol, and addDynamic crash MuseScore Studio
+// 4.7.4 (newElement + cursor.add is fatal for those element types) and
+// therefore require an explicit "__experimental": true parameter.
 
 import QtQuick 2.9
 import MuseScore 3.0
@@ -24,7 +28,7 @@ MuseScore {
     id: root
     menuPath: "Plugins.MCP Score Bridge"
     description: "WebSocket bridge for mcp-score MCP server"
-    version: "0.1.0"
+    version: "0.2.0"
 
     // Keep the plugin running after onRun (required for persistent server).
     pluginType: "dock"
@@ -88,6 +92,9 @@ MuseScore {
     property int cursorMeasure: 1   // 1-indexed measure number
     property int cursorStaff: 0     // 0-indexed staff index
     property int cursorVoice: 0     // voice (always 0 for now)
+    property int cursorTick: -1     // intra-measure tick (-1 = measure start);
+                                    // advanced by addNote so consecutive notes
+                                    // accumulate instead of overwriting
 
     // ===================================================================
     // Command dispatch
@@ -132,6 +139,7 @@ MuseScore {
                 case "undo":                return handleUndo();
                 case "processSequence":     return handleProcessSequence(params);
                 case "exportScore":         return handleExportScore(params);
+                case "apiProbe":            return handleApiProbe();
                 default:
                     return { error: "Unknown command: " + command };
             }
@@ -169,6 +177,9 @@ MuseScore {
     // ===================================================================
 
     /// Create a MuseScore Cursor at the current logical position.
+    /// Positions at the start of cursorMeasure, then seeks forward to
+    /// cursorTick when one is recorded (so consecutive addNote commands
+    /// continue where the previous one ended instead of overwriting).
     function positionedCursor() {
         if (!curScore) return null;
         var cursor = curScore.newCursor();
@@ -178,6 +189,11 @@ MuseScore {
 
         for (var i = 1; i < cursorMeasure; i++) {
             cursor.nextMeasure();
+        }
+        if (cursorTick >= 0) {
+            while (cursor.tick < cursorTick && cursor.next()) {
+                // seek forward within the score to the recorded tick
+            }
         }
         return cursor;
     }
@@ -237,6 +253,25 @@ MuseScore {
         return isNaN(parsed) ? null : parsed;
     }
 
+    /// Derive a note name like "C4" or "Eb3" from tpc + MIDI pitch.
+    /// note.noteName is undefined in MuseScore 4, so the name is computed:
+    /// step letter = "FCGDAEB"[(tpc + 1) % 7], alteration =
+    /// floor((tpc + 1) / 7) - 2, octave from the written pitch class.
+    function noteNameFromTpcPitch(tpc, pitch) {
+        if (tpc === undefined || tpc === null || pitch === undefined)
+            return null;
+        var steps = "FCGDAEB";
+        var step = steps.charAt(((tpc + 1) % 7 + 7) % 7);
+        var alteration = Math.floor((tpc + 1) / 7) - 2;
+        var naturalPc = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[step];
+        var octave = Math.floor((pitch - naturalPc - alteration) / 12) - 1;
+        var accidental = "";
+        for (var a = 0; a < Math.abs(alteration); a++) {
+            accidental += (alteration > 0) ? "#" : "b";
+        }
+        return step + accidental + octave;
+    }
+
     /// Describe a score element as a plain object for JSON serialization.
     function describeElement(element) {
         if (!element) return null;
@@ -250,7 +285,7 @@ MuseScore {
                 notes.push({
                     pitch: note.pitch,
                     tpc: note.tpc,
-                    name: note.noteName || null
+                    name: noteNameFromTpcPitch(note.tpc, note.pitch)
                 });
             }
             info.notes = notes;
@@ -266,7 +301,7 @@ MuseScore {
         } else if (element.type === Element.NOTE) {
             info.pitch = element.pitch;
             info.tpc = element.tpc;
-            info.name = element.noteName || null;
+            info.name = noteNameFromTpcPitch(element.tpc, element.pitch);
         }
 
         return info;
@@ -280,17 +315,128 @@ MuseScore {
         return { result: "pong" };
     }
 
+    /// Introspect the MuseScore 4 plugin API: which properties and
+    /// functions actually exist at runtime, plus element property
+    /// round-trips that never touch the score. Diagnostic only.
+    function handleApiProbe() {
+        var probe = {};
+        probe.pluginVersion = root.version;
+        probe.globals = {
+            cmd: typeof cmd,
+            newScore: typeof newScore,
+            newElement: typeof newElement,
+            fraction: typeof fraction,
+            writeScore: typeof writeScore,
+            mscoreVersion: (typeof mscoreVersion !== "undefined") ? String(mscoreVersion) : null
+        };
+
+        if (curScore) {
+            probe.score = {
+                undo: typeof curScore.undo,
+                undoRedo: typeof curScore.undoRedo,
+                undoStack: typeof curScore.undoStack,
+                transpose: typeof curScore.transpose,
+                appendMeasures: typeof curScore.appendMeasures,
+                selection: typeof curScore.selection,
+                title: typeof curScore.title
+            };
+            if (curScore.parts && curScore.parts.length > 0) {
+                var part = curScore.parts[0];
+                probe.part = {
+                    partName: typeof part.partName,
+                    startStaff: typeof part.startStaff,
+                    endStaff: typeof part.endStaff,
+                    startTrack: typeof part.startTrack,
+                    endTrack: typeof part.endTrack,
+                    instruments: typeof part.instruments
+                };
+                if (typeof part.startTrack === "number") {
+                    probe.part.startTrackValue = part.startTrack;
+                    probe.part.endTrackValue = part.endTrack;
+                }
+            }
+            var cur = curScore.newCursor();
+            cur.rewind(Cursor.SCORE_START);
+            probe.cursor = {
+                timeSignature: typeof cur.timeSignature,
+                keySignature: typeof cur.keySignature,
+                rewindToTick: typeof cur.rewindToTick,
+                next: typeof cur.next,
+                prev: typeof cur.prev
+            };
+            if (cur.measure) {
+                probe.measure = {
+                    timesigActual: typeof cur.measure.timesigActual,
+                    timesigNominal: typeof cur.measure.timesigNominal,
+                    firstSegment: typeof cur.measure.firstSegment,
+                    lastSegment: typeof cur.measure.lastSegment
+                };
+                if (cur.measure.timesigActual) {
+                    probe.measure.timesigActualValue = {
+                        numerator: cur.measure.timesigActual.numerator,
+                        denominator: cur.measure.timesigActual.denominator
+                    };
+                }
+            }
+        }
+
+        // Element property round-trips: create elements WITHOUT adding
+        // them to the score, assign, and read back. Reveals broken
+        // property mappings (e.g. KEYSIG key writing the wrong value).
+        probe.roundTrips = {};
+        try {
+            var ks = newElement(Element.KEYSIG);
+            ks.key = 2;
+            probe.roundTrips.keysigKey = { wrote: 2, read: ks.key };
+        } catch (e) {
+            probe.roundTrips.keysigKey = { error: e.message || String(e) };
+        }
+        try {
+            var tt = newElement(Element.TEMPO_TEXT);
+            tt.text = "probe";
+            tt.tempo = 1.5;
+            probe.roundTrips.tempoText = {
+                wroteText: "probe", readText: tt.text,
+                wroteTempo: 1.5, readTempo: tt.tempo
+            };
+        } catch (e) {
+            probe.roundTrips.tempoText = { error: e.message || String(e) };
+        }
+        try {
+            var nt = newElement(Element.NOTE);
+            nt.pitch = 61;
+            nt.tpc = 21;
+            probe.roundTrips.notePitchTpc = {
+                wrotePitch: 61, readPitch: nt.pitch,
+                wroteTpc: 21, readTpc: nt.tpc
+            };
+        } catch (e) {
+            probe.roundTrips.notePitchTpc = { error: e.message || String(e) };
+        }
+
+        return { result: probe };
+    }
+
     /// Write a snapshot of the live in-memory score to disk via writeScore().
     /// Captures unsaved edits without touching the user's own file.
-    /// params: { path: "C:/full/path/out.mscz", format: "mscz" | "musicxml" | ... }
+    /// params: { path: "C:/full/path/out.musicxml", format: "musicxml" | ... }
     function handleExportScore(params) {
         var scoreErr = requireScore();
         if (scoreErr) return scoreErr;
         if (!params.path) return { error: "exportScore requires 'path'" };
 
-        var format = params.format || "mscz";
+        var format = params.format || "musicxml";
+        if (format === "mscz") {
+            return { error: "mscz export is broken in MuseScore Studio " +
+                "4.7.4: writeScore produces a 0-byte file, never returns, " +
+                "and raises a blocking modal dialog. Use musicxml instead." };
+        }
         var ok = writeScore(curScore, params.path, format);
-        return { result: { written: ok === true, path: params.path, format: format } };
+        if (ok !== true) {
+            return { error: "writeScore failed for " + params.path +
+                " (format " + format + ")" };
+        }
+        return { result: { written: true, path: params.path, format: format } };
     }
 
     /// Return metadata about the currently open score.
@@ -321,6 +467,18 @@ MuseScore {
             };
         }
 
+        // cursor.timeSignature can be undefined in MuseScore 4; fall
+        // back to the first measure's actual time signature.
+        if (timeSig === null && cursor.measure && cursor.measure.timesigActual) {
+            var actual = cursor.measure.timesigActual;
+            if (actual.numerator !== undefined) {
+                timeSig = {
+                    numerator: actual.numerator,
+                    denominator: actual.denominator
+                };
+            }
+        }
+
         return {
             result: {
                 title: curScore.title || "",
@@ -328,7 +486,8 @@ MuseScore {
                 parts: parts,
                 measureCount: countMeasures(),
                 keySignature: keySig,
-                timeSignature: timeSig
+                timeSignature: timeSig,
+                pluginVersion: root.version
             }
         };
     }
@@ -341,10 +500,14 @@ MuseScore {
 
         var elementInfo = cursor.element ? describeElement(cursor.element) : null;
 
+        // cursor.timeSignature is undefined in MuseScore 4; fall back to
+        // the measure's actual time signature when available.
         var beat = null;
-        if (cursor.measure && cursor.timeSignature) {
+        var timeSig = cursor.timeSignature
+            || (cursor.measure ? cursor.measure.timesigActual : null);
+        if (cursor.measure && timeSig && timeSig.denominator) {
             var measureStartTick = cursor.measure.firstSegment.tick;
-            var ticksPerBeat = ticksPerWholeNote / cursor.timeSignature.denominator;
+            var ticksPerBeat = ticksPerWholeNote / timeSig.denominator;
             beat = Math.floor((cursor.tick - measureStartTick) / ticksPerBeat) + 1;
         }
 
@@ -380,6 +543,7 @@ MuseScore {
         }
 
         cursorMeasure = measureNumber;
+        cursorTick = -1;
         return { result: { measure: cursorMeasure, staff: cursorStaff } };
     }
 
@@ -401,6 +565,7 @@ MuseScore {
         }
 
         cursorStaff = staffIndex;
+        cursorTick = -1;
         return { result: { measure: cursorMeasure, staff: cursorStaff } };
     }
 
@@ -423,27 +588,37 @@ MuseScore {
         if (pitch === null) {
             return { error: "Invalid value for pitch: " + params.pitch };
         }
+        if (pitch < 0 || pitch > 127) {
+            return { error: "pitch must be a MIDI value 0-127, got: " + pitch };
+        }
         var numerator = 1;
         var denominator = 4;
         if (params.duration) {
             if (params.duration.numerator !== undefined) {
                 numerator = safeParseInt(params.duration.numerator);
-                if (numerator === null) return { error: "Invalid duration numerator" };
+                if (numerator === null || numerator < 1)
+                    return { error: "Invalid duration numerator" };
             }
             if (params.duration.denominator !== undefined) {
                 denominator = safeParseInt(params.duration.denominator);
-                if (denominator === null) return { error: "Invalid duration denominator" };
+                if (denominator === null || denominator < 1)
+                    return { error: "Invalid duration denominator" };
             }
         }
         var advance = (params.advanceCursorAfterAction !== false);
 
+        // try/finally: never leave an open command group if addNote throws.
         curScore.startCmd("addNote");
-        cursor.setDuration(numerator, denominator);
-        cursor.addNote(pitch);
-        curScore.endCmd();
+        try {
+            cursor.setDuration(numerator, denominator);
+            cursor.addNote(pitch);
+        } finally {
+            curScore.endCmd();
+        }
 
         if (advance) {
             cursorMeasure = measureNumberAtTick(cursor.tick);
+            cursorTick = cursor.tick;
         }
 
         return {
@@ -472,10 +647,13 @@ MuseScore {
         }
 
         curScore.startCmd("addRehearsalMark");
-        var rehearsalMark = newElement(Element.REHEARSAL_MARK);
-        rehearsalMark.text = params.text;
-        cursor.add(rehearsalMark);
-        curScore.endCmd();
+        try {
+            var rehearsalMark = newElement(Element.REHEARSAL_MARK);
+            rehearsalMark.text = params.text;
+            cursor.add(rehearsalMark);
+        } finally {
+            curScore.endCmd();
+        }
 
         return { result: { text: params.text, measure: cursorMeasure } };
     }
@@ -501,11 +679,21 @@ MuseScore {
             return { error: "No valid measure at cursor position" };
         }
 
+        if (params.__experimental !== true) {
+            return { error: "setBarline is disabled: it crashes MuseScore " +
+                "Studio 4.7.4 outright (newElement + cursor.add is fatal " +
+                "for BAR_LINE). Pass __experimental: true to probe at " +
+                "your own risk." };
+        }
+
         curScore.startCmd("setBarline");
-        var barline = newElement(Element.BAR_LINE);
-        barline.barlineType = barlineType;
-        cursor.add(barline);
-        curScore.endCmd();
+        try {
+            var barline = newElement(Element.BAR_LINE);
+            barline.barlineType = barlineType;
+            cursor.add(barline);
+        } finally {
+            curScore.endCmd();
+        }
 
         return { result: { type: params.type, measure: cursorMeasure } };
     }
@@ -533,10 +721,13 @@ MuseScore {
         }
 
         curScore.startCmd("setKeySignature");
-        var keySig = newElement(Element.KEYSIG);
-        keySig.key = fifths;
-        cursor.add(keySig);
-        curScore.endCmd();
+        try {
+            var keySig = newElement(Element.KEYSIG);
+            keySig.key = fifths;
+            cursor.add(keySig);
+        } finally {
+            curScore.endCmd();
+        }
 
         return { result: { fifths: fifths, measure: cursorMeasure } };
     }
@@ -562,10 +753,13 @@ MuseScore {
         }
 
         curScore.startCmd("setTimeSignature");
-        var timeSig = newElement(Element.TIMESIG);
-        timeSig.timesig = fraction(numerator, denominator);
-        cursor.add(timeSig);
-        curScore.endCmd();
+        try {
+            var timeSig = newElement(Element.TIMESIG);
+            timeSig.timesig = fraction(numerator, denominator);
+            cursor.add(timeSig);
+        } finally {
+            curScore.endCmd();
+        }
 
         return { result: { numerator: numerator, denominator: denominator, measure: cursorMeasure } };
     }
@@ -592,12 +786,15 @@ MuseScore {
         }
 
         curScore.startCmd("setTempo");
-        var tempo = newElement(Element.TEMPO_TEXT);
-        tempo.text = displayText;
-        tempo.tempo = bpm / secondsPerMinute;
-        tempo.followText = false;
-        cursor.add(tempo);
-        curScore.endCmd();
+        try {
+            var tempo = newElement(Element.TEMPO_TEXT);
+            tempo.text = displayText;
+            tempo.tempo = bpm / secondsPerMinute;
+            tempo.followText = false;
+            cursor.add(tempo);
+        } finally {
+            curScore.endCmd();
+        }
 
         return { result: { bpm: bpm, text: displayText, measure: cursorMeasure } };
     }
@@ -617,11 +814,21 @@ MuseScore {
             return { error: "No valid segment at cursor position" };
         }
 
+        if (params.__experimental !== true) {
+            return { error: "addChordSymbol is disabled: it crashes " +
+                "MuseScore Studio 4.7.4 outright (newElement + cursor.add " +
+                "is fatal for HARMONY). Pass __experimental: true to probe " +
+                "at your own risk." };
+        }
+
         curScore.startCmd("addChordSymbol");
-        var harmony = newElement(Element.HARMONY);
-        harmony.text = params.text;
-        cursor.add(harmony);
-        curScore.endCmd();
+        try {
+            var harmony = newElement(Element.HARMONY);
+            harmony.text = params.text;
+            cursor.add(harmony);
+        } finally {
+            curScore.endCmd();
+        }
 
         return { result: { text: params.text, measure: cursorMeasure } };
     }
@@ -641,14 +848,24 @@ MuseScore {
             return { error: "No valid segment at cursor position" };
         }
 
-        curScore.startCmd("addDynamic");
-        var dynamic = newElement(Element.DYNAMIC);
-        dynamic.text = params.type;
-        if (dynamicVelocities[params.type] !== undefined) {
-            dynamic.velocity = dynamicVelocities[params.type];
+        if (params.__experimental !== true) {
+            return { error: "addDynamic is disabled: newElement + " +
+                "cursor.add crashes MuseScore Studio 4.7.4 for the same " +
+                "element family as setBarline/addChordSymbol. Pass " +
+                "__experimental: true to probe at your own risk." };
         }
-        cursor.add(dynamic);
-        curScore.endCmd();
+
+        curScore.startCmd("addDynamic");
+        try {
+            var dynamic = newElement(Element.DYNAMIC);
+            dynamic.text = params.type;
+            if (dynamicVelocities[params.type] !== undefined) {
+                dynamic.velocity = dynamicVelocities[params.type];
+            }
+            cursor.add(dynamic);
+        } finally {
+            curScore.endCmd();
+        }
 
         return { result: { type: params.type, measure: cursorMeasure } };
     }
@@ -669,8 +886,11 @@ MuseScore {
         }
 
         curScore.startCmd("appendMeasures");
-        curScore.appendMeasures(count);
-        curScore.endCmd();
+        try {
+            curScore.appendMeasures(count);
+        } finally {
+            curScore.endCmd();
+        }
 
         return { result: { count: count, totalMeasures: countMeasures() } };
     }
@@ -692,12 +912,12 @@ MuseScore {
         var measureStart = cursor.measure.firstSegment.tick;
         var measureEnd = cursor.measure.lastSegment.tick + 1;
 
-        curScore.startCmd("selectCurrentMeasure");
+        // A selection is not an edit: no startCmd/endCmd. Wrapping it in a
+        // command group pollutes the undo stack with empty entries.
         curScore.selection.selectRange(
             measureStart, measureEnd,
             cursorStaff, cursorStaff + 1
         );
-        curScore.endCmd();
 
         return { result: { measure: cursorMeasure, staff: cursorStaff } };
     }
@@ -743,12 +963,11 @@ MuseScore {
         }
         var endTick = cursor.measure ? cursor.tick : curScore.lastSegment.tick + 1;
 
-        curScore.startCmd("selectCustomRange");
+        // A selection is not an edit: no startCmd/endCmd (undo hygiene).
         curScore.selection.selectRange(
             startTick, endTick,
             startStaff, endStaff + 1  // selectRange uses exclusive end for staves
         );
-        curScore.endCmd();
 
         return {
             result: {
@@ -781,22 +1000,50 @@ MuseScore {
             return { error: "No active selection. Use selectCurrentMeasure or selectCustomRange first." };
         }
 
-        var direction = semitones >= 0 ? 0 : 1;
-        var absSemitones = Math.abs(semitones);
-
-        // Map semitones to diatonic + chromatic interval pair for correct
-        // enharmonic spelling in the transposition.
-        var diatonicInterval = semitoneToDiatonic[absSemitones % 12]
-            + Math.floor(absSemitones / 12) * 7;
-
+        // curScore.transpose() does not exist in MuseScore 4's plugin API,
+        // so transpose note-by-note: shift pitch and adjust the tonal pitch
+        // class (tpc) so the enharmonic spelling stays correct.
+        var transposed = 0;
         curScore.startCmd("transpose");
-        // transpose(mode, direction, key, diatonicInterval, chromaticInterval,
-        //           transposeKeySignatures, transposeChordNames)
-        // mode 0 = by interval, direction 0 = up / 1 = down, key 0 = unused
-        curScore.transpose(0, direction, 0, diatonicInterval, absSemitones, true, true);
-        curScore.endCmd();
+        try {
+            var elements = curScore.selection.elements;
+            for (var i = 0; i < elements.length; i++) {
+                var element = elements[i];
+                if (element.type === Element.NOTE) {
+                    transposeNote(element, semitones);
+                    transposed++;
+                } else if (element.type === Element.CHORD && element.notes) {
+                    for (var j = 0; j < element.notes.length; j++) {
+                        transposeNote(element.notes[j], semitones);
+                        transposed++;
+                    }
+                }
+            }
+        } finally {
+            curScore.endCmd();
+        }
 
-        return { result: { semitones: semitones } };
+        return { result: { semitones: semitones, notesTransposed: transposed } };
+    }
+
+    // Tonal-pitch-class delta per semitone step, chosen for conventional
+    // chromatic spelling (e.g. +1 from C gives C#, -1 from C gives B).
+    // tpc moves in fifths: +7 = augmented unison (sharpen), -5 = minor
+    // second, etc. Index = ((semitones % 12) + 12) % 12.
+    readonly property var semitoneToTpcDelta: [0, 7, 2, -3, 4, -1, 6, 1, -4, 3, -2, 5]
+
+    /// Transpose one note by the given number of semitones, keeping a
+    /// sensible enharmonic spelling and clamping tpc into MuseScore's
+    /// valid range (-1..33) by respelling when necessary.
+    function transposeNote(note, semitones) {
+        var tpcDelta = semitoneToTpcDelta[((semitones % 12) + 12) % 12];
+        var newTpc = note.tpc + tpcDelta;
+        // Respell out-of-range spellings enharmonically (12 fifths = same
+        // pitch class, opposite accidental family).
+        while (newTpc > 33) newTpc -= 12;
+        while (newTpc < -1) newTpc += 12;
+        note.pitch = note.pitch + semitones;
+        note.tpc = newTpc;
     }
 
     /// Undo the last action.
@@ -815,6 +1062,7 @@ MuseScore {
         if (curScore.nstaves > 0 && cursorStaff >= curScore.nstaves) {
             cursorStaff = curScore.nstaves - 1;
         }
+        cursorTick = -1;
 
         return { result: "ok" };
     }
@@ -918,6 +1166,7 @@ MuseScore {
                 if (measureNum < 1 || measureNum > total)
                     return { error: "Measure " + measureNum + " out of range (1-" + total + ")" };
                 cursorMeasure = measureNum;
+                cursorTick = -1;
                 return { result: { measure: cursorMeasure, staff: cursorStaff }, newCursor: positionedCursor() };
             }
 
@@ -930,6 +1179,7 @@ MuseScore {
                 if (staffIdx < 0 || staffIdx >= curScore.nstaves)
                     return { error: "Staff " + staffIdx + " out of range (0-" + (curScore.nstaves - 1) + ")" };
                 cursorStaff = staffIdx;
+                cursorTick = -1;
                 return { result: { measure: cursorMeasure, staff: cursorStaff }, newCursor: positionedCursor() };
             }
 
@@ -951,12 +1201,16 @@ MuseScore {
                         if (noteDen === null) return { error: "Invalid duration denominator" };
                     }
                 }
+                if (pitch < 0 || pitch > 127) {
+                    return { error: "pitch must be a MIDI value 0-127, got: " + pitch };
+                }
                 var advance = (params.advanceCursorAfterAction !== false);
                 if (!cursor) return { error: "Could not position cursor" };
                 cursor.setDuration(noteNum, noteDen);
                 cursor.addNote(pitch);
                 if (advance) {
                     cursorMeasure = measureNumberAtTick(cursor.tick);
+                    cursorTick = cursor.tick;
                 }
                 return { result: { pitch: pitch, duration: { numerator: noteNum, denominator: noteDen }, measure: cursorMeasure } };
             }

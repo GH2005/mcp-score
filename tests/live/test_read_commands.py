@@ -79,12 +79,6 @@ async def test_get_cursor_info_reports_element_at_measure(
     assert [n["pitch"] for n in element.get("notes", [])] == [60]
 
 
-@pytest.mark.xfail(
-    reason="cursor.timeSignature is undefined in MuseScore 4.7.4, so the "
-    "plugin's beat computation is skipped and beat is always null. "
-    "Plugin fix planned (PR5).",
-    strict=True,
-)
 async def test_get_cursor_info_computes_beat(
     bridge: MuseScoreBridge, scratch: ScratchFn
 ) -> None:
@@ -95,12 +89,6 @@ async def test_get_cursor_info_computes_beat(
     assert info["result"]["beat"] == 1
 
 
-@pytest.mark.xfail(
-    reason="note.noteName is undefined in MuseScore 4.7.4, so element note "
-    "names are always null in getCursorInfo replies. Plugin fix planned "
-    "(PR5, derive the name from pitch/tpc instead).",
-    strict=True,
-)
 async def test_get_cursor_info_reports_note_names(
     bridge: MuseScoreBridge, scratch: ScratchFn
 ) -> None:
