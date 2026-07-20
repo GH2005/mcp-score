@@ -15,16 +15,18 @@ src/mcp_score/
   app.py              Shared FastMCP instance
   tools/
     connection.py     Connect/disconnect MuseScore, Dorico & Sibelius, ping, score info
-    analysis.py       Read passages and measures from live score
-    manipulation.py   Modify live score (barlines, chords, keys, tempo, transpose)
+    analysis.py       Ground-truth reads (exportScore + MusicXML parse) and export
+    manipulation.py   Modify live score (notes, time signatures, rehearsal marks,
+                      transpose, batch sequences; MuseScore-harmful commands guarded)
   bridge/
     base.py           ScoreBridge abstract base class
     remote_control.py Shared Remote Control protocol (Dorico & Sibelius)
     musescore.py      WebSocket client for MuseScore plugin
     dorico.py         Dorico defaults (thin subclass of RemoteControlBridge)
     sibelius.py       Sibelius defaults (thin subclass of RemoteControlBridge)
+  musicxml.py         MusicXML parsing/diffing (the ground-truth read path)
   musescore/
-    plugin.qml        MuseScore QML plugin (WebSocket server, 19 commands)
+    plugin.qml        MuseScore QML plugin (WebSocket server, 22 commands)
 
 .claude/skills/
   score-generate/     Claude Code skill for score generation via music21
@@ -32,7 +34,9 @@ src/mcp_score/
     references/
 
 tests/                pytest tests, one file per module
-docs/                 Diataxis-structured documentation
+tests/live/           live suite against a running MuseScore (pytest -m live)
+docs/                 Diataxis-structured documentation (see docs/agent-playbook.md
+                      for the verified MuseScore support matrix)
 ```
 
 ### Why two approaches?
@@ -86,7 +90,11 @@ MCP tools handle live score interaction (MuseScore, Dorico, or Sibelius):
 
 1. **Connection** — manage WebSocket bridges to MuseScore, Dorico, and Sibelius
 2. **Analysis** — read and understand musical content from the live score
-3. **Manipulation** — modify the live score (barlines, chords, keys, tempo, transpose, undo)
+3. **Manipulation** — modify the live score (notes, time signatures, rehearsal
+   marks, transpose, batch sequences). Commands MuseScore Studio 4.7.4 cannot
+   execute safely (barlines, chord symbols, key signatures, tempo, undo) are
+   guarded — read [docs/agent-playbook.md](docs/agent-playbook.md) before
+   changing live-score behavior
 
 Score generation is handled by the `score-generate` skill — Claude writes music21 scripts directly, giving full API access without an MCP bottleneck.
 
@@ -103,7 +111,8 @@ Score generation is handled by the `score-generate` skill — Claude writes musi
 ### PR workflow
 
 1. Create feature branch
-2. Make changes, test with `pytest` and manual MuseScore testing
+2. Make changes, test with `pytest`; for live-score behavior run the live
+   suite against a running MuseScore: `pytest -m live tests/live`
 3. Push and create PR
 4. Review loop: wait for CI + Copilot -> address comments -> push -> iterate until clean
 5. Merge

@@ -10,14 +10,11 @@
 
 ## Installation
 
-```bash
-pip install mcp-score
-```
-
-Or with uv:
+mcp-score is not published to PyPI yet; install from the repository with
+uv:
 
 ```bash
-uv tool install mcp-score
+uv tool install git+https://github.com/GH2005/mcp-score
 ```
 
 ### Install the score generation skill
@@ -87,16 +84,20 @@ For reading and modifying a score that's already open in MuseScore:
 
 > "Read measures 1 through 8 of the first staff."
 
-> "Add a rehearsal mark 'A' at measure 1 and a double barline at measure 8."
+> "Add a rehearsal mark 'A' at measure 1 and write the notes C4, E4, G4 into measure 2."
 
 > "Transpose the trumpet part in measures 5-8 up a perfect fourth (5 semitones)."
 
-> "Undo that last change."
-
-All modifications happen immediately in MuseScore.
+All modifications happen immediately in MuseScore, and reads are
+ground-truth accurate (the live score is exported to MusicXML and
+parsed). Some operations are guarded because MuseScore Studio 4.7.4
+cannot execute them safely (barlines, chord symbols, key signatures,
+tempo marks, undo) -- the tools explain this when asked. See the
+[agent playbook](agent-playbook.md) for the verified support matrix.
 
 ## Next steps
 
+- [Agent playbook](agent-playbook.md) -- verified usage pattern for every tool and command
 - [Architecture](architecture.md) -- understand how mcp-score is structured
 - [Tool reference](reference.md) -- complete list of MCP tools
 - [MuseScore plugin](musescore-plugin.md) -- detailed plugin setup
