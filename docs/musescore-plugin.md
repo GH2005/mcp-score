@@ -203,7 +203,7 @@ This example uses `processSequence` to write a four-note melody in the first mea
     "sequence": [
       { "action": "goToMeasure", "params": { "measure": 1 } },
       { "action": "goToStaff", "params": { "staff": 0 } },
-      { "action": "setTempo", "params": { "bpm": 120, "text": "Allegro" } },
+      { "action": "addRehearsalMark", "params": { "text": "A" } },
       {
         "action": "addNote",
         "params": {

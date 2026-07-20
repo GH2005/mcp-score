@@ -25,8 +25,8 @@ mcp-score provides two complementary approaches for AI-driven music notation:
 | Claude Skill   |   | (src/mcp_score/)            |
 |                |   |                             |
 | Writes music21 |   | tools/connection.py (8)     |
-| Python script  |   | tools/analysis.py   (3)     |
-| -> MusicXML    |   | tools/manipulation.py (7)   |
+| Python script  |   | tools/analysis.py   (4)     |
+| -> MusicXML    |   | tools/manipulation.py (11)  |
 +----------------+   |                             |
                      | bridge/                     |
                      |   base.py (ScoreBridge)     |
@@ -107,17 +107,20 @@ The Remote Control WebSocket API (shared by Dorico and Sibelius) is fundamentall
 
 ### What the WebSocket API can do
 
-| Capability                                                     |         MuseScore          |          Dorico          |         Sibelius         |
-| -------------------------------------------------------------- | :------------------------: | :----------------------: | :----------------------: |
-| Execute commands (undo, navigation, barlines, rehearsal marks) |            Yes             |   Yes (~994 commands)    |   Yes (900+ commands)    |
-| Get application status                                         |            Yes             |           Yes            |           Yes            |
-| Get selection properties                                       |            Yes             |           Yes            |           Yes            |
-| Get flows and layouts                                          |            N/A             |           Yes            |         Unknown          |
-| Set barlines                                                   |            Yes             |           Yes            |           Yes            |
-| Add rehearsal marks                                            |   Yes (with custom text)   | Yes (auto-numbered only) | Yes (auto-numbered only) |
-| Navigate to measure                                            |            Yes             |           Yes            |           Yes            |
-| Read note content                                              |    Yes (via QML plugin)    |            No            |            No            |
-| Read cursor position                                           | Yes (measure, beat, staff) | Limited (UI state only)  | Limited (UI state only)  |
+| Capability                                                     |               MuseScore               |          Dorico          |         Sibelius         |
+| -------------------------------------------------------------- | :-----------------------------------: | :----------------------: | :----------------------: |
+| Execute commands (undo, navigation, barlines, rehearsal marks) |                  Yes                  |   Yes (~994 commands)    |   Yes (900+ commands)    |
+| Get application status                                         |                  Yes                  |           Yes            |           Yes            |
+| Get selection properties                                       |                  Yes                  |           Yes            |           Yes            |
+| Get flows and layouts                                          |                  N/A                  |           Yes            |         Unknown          |
+| Set barlines                                                   |      No (crashes 4.7.4; guarded)      |           Yes            |           Yes            |
+| Add rehearsal marks                                            |        Yes (with custom text)         | Yes (auto-numbered only) | Yes (auto-numbered only) |
+| Navigate to measure                                            |                  Yes                  |           Yes            |           Yes            |
+| Read note content                                              |  Yes (exportScore + MusicXML parse)   |            No            |            No            |
+| Set key signature / tempo                                      | No (corrupt insert in 4.7.4; guarded) |            No            |            No            |
+| Undo                                                           |      No (silent no-op in 4.7.4)       |           Yes            |           Yes            |
+| Export score snapshot (MusicXML)                               |           Yes (exportScore)           |            No            |            No            |
+| Read cursor position                                           |      Yes (measure, beat, staff)       | Limited (UI state only)  | Limited (UI state only)  |
 
 ### What the WebSocket API cannot do (and why)
 
@@ -129,7 +132,7 @@ These are **upstream API constraints** in Dorico and Sibelius, not mcp-score lim
 
 **Staff navigation** (Dorico/Sibelius) -- The API operates on the current selection. There is no command to programmatically move the selection to a specific staff.
 
-**MusicXML export** -- None of the WebSocket APIs support exporting score content as MusicXML programmatically.
+**MusicXML export** (Dorico/Sibelius) -- Their WebSocket APIs cannot export score content programmatically. The MuseScore plugin CAN: its `exportScore` command snapshots the live score to MusicXML, which is what makes ground-truth reads possible there.
 
 ### The future path
 
@@ -157,9 +160,11 @@ src/mcp_score/
   tools/
     __init__.py         Shared helpers: connected_bridge(), to_json(), etc.
     connection.py       8 tools: connect/disconnect MuseScore, Dorico & Sibelius, ping, info
-    analysis.py         3 tools: read_passage, get_measure_content, get_selection_properties
-    manipulation.py     7 tools: live rehearsal marks, chords, barlines, keys,
-                                 tempo, transpose, undo
+    analysis.py         4 tools: read_passage, get_measure_content,
+                                 get_selection_properties, export_live_score
+    manipulation.py     11 tools: rehearsal marks, notes, time signatures, measures,
+                                 sequences, transpose, undo + guarded chords/barlines/keys/tempo
+  musicxml.py           MusicXML parsing/diffing (ground-truth read path)
   bridge/
     __init__.py         Bridge registry (get_active_bridge, set_active_bridge)
     base.py             ScoreBridge abstract base class
@@ -175,8 +180,10 @@ src/mcp_score/
     SKILL.md            Skill instructions + music21 patterns
     references/         Instrument reference, etc.
 
-tests/                  pytest tests
-docs/                   Documentation (Diataxis structure)
+tests/                  pytest tests (mocked; CI-safe)
+tests/live/             live suite against a running MuseScore (pytest -m live)
+docs/                   Documentation (Diataxis structure; agent-playbook.md is the
+                        verified MuseScore support matrix)
 ```
 
 ## Module responsibilities
@@ -217,7 +224,7 @@ Imports the three tool modules (connection, analysis, manipulation) to register 
 
 Manages which bridge is active. `get_active_bridge()` returns the current bridge; `set_active_bridge()` switches it. Connection tools call these to manage the active bridge lifecycle.
 
-## MCP tools (18 total)
+## MCP tools (23 total)
 
 ### Connection (8 tools)
 
@@ -232,25 +239,30 @@ Manages which bridge is active. `get_active_bridge()` returns the current bridge
 | `get_live_score_info`       | Get info about the open score (any app)        |
 | `ping_score_app`            | Check if connected app is responsive (any app) |
 
-### Analysis (3 tools)
+### Analysis (4 tools)
 
-| Tool                       | Purpose                                 |
-| -------------------------- | --------------------------------------- |
-| `read_passage`             | Read content from a range of measures   |
-| `get_measure_content`      | Read a specific measure and staff       |
-| `get_selection_properties` | Get properties of the current selection |
+| Tool                       | Purpose                                              |
+| -------------------------- | ---------------------------------------------------- |
+| `read_passage`             | Read a range of measures (ground truth on MuseScore) |
+| `get_measure_content`      | Read a specific measure and staff (ground truth)     |
+| `get_selection_properties` | Get properties of the current selection              |
+| `export_live_score`        | Snapshot the live score to a file (MuseScore)        |
 
-### Manipulation (7 tools)
+### Manipulation (11 tools)
 
-| Tool                      | Purpose                |
-| ------------------------- | ---------------------- |
-| `add_live_rehearsal_mark` | Add a rehearsal mark   |
-| `add_live_chord_symbol`   | Add a chord symbol     |
-| `set_live_barline`        | Set a barline type     |
-| `set_live_key_signature`  | Set the key signature  |
-| `set_live_tempo`          | Set the tempo          |
-| `transpose_passage`       | Transpose by semitones |
-| `undo_last_action`        | Undo the last action   |
+| Tool                      | Purpose                                               |
+| ------------------------- | ----------------------------------------------------- |
+| `add_live_rehearsal_mark` | Add a rehearsal mark                                  |
+| `add_live_notes`          | Write a run of notes atomically (MuseScore)           |
+| `set_live_time_signature` | Set the time signature (MuseScore)                    |
+| `append_live_measures`    | Append empty measures (MuseScore)                     |
+| `process_live_sequence`   | Batch plugin actions in one undo group (MuseScore)    |
+| `transpose_passage`       | Transpose by semitones (note-by-note on MuseScore)    |
+| `add_live_chord_symbol`   | Add a chord symbol (guarded on MuseScore: crash)      |
+| `set_live_barline`        | Set a barline type (guarded on MuseScore: crash)      |
+| `set_live_key_signature`  | Set the key signature (guarded on MuseScore: corrupt) |
+| `set_live_tempo`          | Set the tempo (guarded on MuseScore: corrupt)         |
+| `undo_last_action`        | Undo the last action (silent no-op on MuseScore)      |
 
 ## Key design decisions
 
@@ -272,6 +284,10 @@ All three supported applications use WebSocket for communication, but the protoc
 
 - **MuseScore**: QML plugin runs inside MuseScore, opens a WebSocket server on port 8765. JSON messages with `command` and `params` fields. Custom protocol -- implemented directly in `MuseScoreBridge`.
 - **Dorico & Sibelius**: Both use the same "Remote Control" protocol with `message`/`commandName` fields and session token handshake. Shared logic lives in `RemoteControlBridge`; thin subclasses provide application-specific defaults (port, name).
+
+### Ground-truth reads on MuseScore
+
+MuseScore 4's plugin cursor API cannot reliably report score contents (chords, voices, and anything past the first element of a measure are invisible to it), and several of its edit APIs fail silently. Reads therefore go through MuseScore's own exporter: the plugin's `exportScore` command snapshots the live score to MusicXML, which is parsed with music21 (`src/mcp_score/musicxml.py`). The committed live test suite (`tests/live/`) verifies every command against these snapshots; commands MuseScore Studio 4.7.4 cannot execute safely are guarded rather than left to crash or corrupt. See [agent-playbook.md](agent-playbook.md).
 
 ### Server does not call LLMs
 

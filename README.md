@@ -1,5 +1,4 @@
-[![CI](https://github.com/tskovlund/mcp-score/actions/workflows/ci.yml/badge.svg)](https://github.com/tskovlund/mcp-score/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/mcp-score.svg)](https://pypi.org/project/mcp-score/)
+[![CI](https://github.com/GH2005/mcp-score/actions/workflows/ci.yml/badge.svg)](https://github.com/GH2005/mcp-score/actions/workflows/ci.yml)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -21,14 +20,17 @@ Claude reads the live score, applies musical intelligence, and writes the arrang
 
 ## Installation
 
+mcp-score is not published to PyPI yet; install from the repository with
+[uv](https://docs.astral.sh/uv/):
+
 ```bash
-pip install mcp-score
+uv tool install git+https://github.com/GH2005/mcp-score
 ```
 
-Or with [uv](https://docs.astral.sh/uv/):
+Or, from a local clone (picks up your working tree):
 
 ```bash
-uv tool install mcp-score
+uv tool install --from /path/to/mcp-score mcp-score
 ```
 
 Then set up the components you need:
@@ -50,7 +52,7 @@ mcp-score has three components that work together:
 
 ### MCP server
 
-A Python MCP server with 18 tools for live score manipulation across MuseScore, Dorico, and Sibelius: connect/disconnect, read passages, add chords, set barlines, transpose, and more. Runs via `mcp-score serve` (or just `mcp-score`).
+A Python MCP server with 23 tools for live score manipulation across MuseScore, Dorico, and Sibelius: connect/disconnect, ground-truth score reads and exports, batch note entry, time signatures, rehearsal marks, transposition, and more. Commands that MuseScore Studio 4.7.4 cannot execute safely (barlines, chord symbols, key signatures, tempo marks) are guarded with explanatory errors -- see the [agent playbook](docs/agent-playbook.md) for the verified support matrix. Runs via `mcp-score serve` (or just `mcp-score`).
 
 ### Score generation skill
 
@@ -58,7 +60,7 @@ A Claude Code [skill](https://docs.anthropic.com/en/docs/claude-code/skills) tha
 
 ### MuseScore plugin
 
-A QML plugin that runs a WebSocket server inside MuseScore 4, enabling the MCP server to read from and write to the active score in real time. Supports 19 commands including navigation, note input, chord symbols, rehearsal marks, barlines, key/time signatures, tempo, transposition, and undo.
+A QML plugin that runs a WebSocket server inside MuseScore 4 (via the native `api.websocketserver`), enabling the MCP server to read from and write to the active score in real time. Supports 22 commands including navigation, note input, rehearsal marks, time signatures, ranged transposition, atomic batch sequences, ground-truth MusicXML export, and API introspection.
 
 ## Configuration
 
@@ -114,6 +116,7 @@ mcp-score help             Show help
 | Document                                     | Description                                    |
 | -------------------------------------------- | ---------------------------------------------- |
 | [Getting started](docs/getting-started.md)   | Set up mcp-score and generate your first score |
+| [Agent playbook](docs/agent-playbook.md)     | Verified usage pattern for every tool/command  |
 | [Architecture](docs/architecture.md)         | System design and key decisions                |
 | [Tool reference](docs/reference.md)          | Complete list of MCP tools                     |
 | [MuseScore plugin](docs/musescore-plugin.md) | Plugin installation and WebSocket protocol     |
