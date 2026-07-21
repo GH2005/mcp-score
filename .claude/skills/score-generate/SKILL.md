@@ -8,12 +8,23 @@ description: >
 allowed-tools: [Bash, Write, Read]
 metadata:
   author: tskovlund
-  version: "1.3"
+  version: "1.4"
 ---
 
 # Score Generation
 
 Generate music scores by writing and executing music21 Python scripts that export MusicXML.
+
+## When NOT to use this skill
+
+If the user already has a score **open in MuseScore** and wants notes, rehearsal
+marks, a time signature change, or a passage transposed added to it, use the
+mcp-score MCP bridge tools instead (`add_live_notes`, `process_live_sequence`,
+`add_live_rehearsal_mark`, `set_live_time_signature`, `transpose_passage`,
+etc.) — they edit the live score directly, no file round-trip needed. See
+[docs/agent-playbook.md](../../../docs/agent-playbook.md) for the verified
+capabilities of each live tool. Use this skill only for building a score
+**from scratch** as a new MusicXML file.
 
 ## Instructions
 
