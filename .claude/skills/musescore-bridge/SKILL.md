@@ -30,11 +30,17 @@ metadata:
 # MuseScore bridge — correct usage
 
 **Before calling any mcp-score MCP tool or sending any command to the
-MuseScore plugin's WebSocket bridge, read
-[docs/agent-playbook.md](../../../docs/agent-playbook.md) in full.** It is
-the single source of truth, verified against a live MuseScore Studio
-4.7.4 by the committed test suite (`tests/live/`) — do not guess at
-parameters, defaults, or which commands are safe to call.
+MuseScore plugin's WebSocket bridge, read `docs/agent-playbook.md` in
+full — via its absolute path,
+`C:\Users\GH200\mcp-score-workspace\mcp-score\docs\agent-playbook.md`.**
+(A relative link from this file does NOT reliably resolve: this skill
+may be loaded through the `~/.claude/skills/` junction, and Windows
+collapses `..` against the junction path before following it to the
+real directory, landing outside the repo. The absolute path always
+works regardless of which copy loaded.) It is the single source of
+truth, verified against a live MuseScore Studio 4.7.4 by the committed
+test suite (`tests/live/`) — do not guess at parameters, defaults, or
+which commands are safe to call.
 
 ## If you only remember five things
 
