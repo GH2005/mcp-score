@@ -41,7 +41,7 @@ mcp-score provides two complementary approaches for AI-driven music notation:
             +---------------v-+  +---v------+ +--v-----------+
             | MuseScore QML   |  | Dorico   | | Sibelius     |
             | Plugin          |  | Remote   | | Connect      |
-            | (plugin.qml)   |  | Control  | | (built-in)   |
+            | (bridge.qml)    |  | Control  | | (built-in)   |
             +-----------------+  | :4560    | | 900+ cmds    |
                                  +----------+ +--------------+
 ```
@@ -173,7 +173,7 @@ src/mcp_score/
     dorico.py           DoricoBridge -- thin subclass (Dorico defaults)
     sibelius.py         SibeliusBridge -- thin subclass (Sibelius defaults)
   musescore/
-    plugin.qml          MuseScore QML plugin (WebSocket server)
+    mcp-score-bridge.qml  MuseScore QML plugin (WebSocket server)
 
 .claude/skills/
   score-generate/       Claude Code skill for score generation

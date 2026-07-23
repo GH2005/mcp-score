@@ -8,7 +8,7 @@ description: >
 allowed-tools: [Bash, Write, Read]
 metadata:
   author: tskovlund
-  version: "1.4"
+  version: "1.5"
 ---
 
 # Score Generation
@@ -19,18 +19,11 @@ Generate music scores by writing and executing music21 Python scripts that expor
 
 If the user already has a score **open in MuseScore** and wants notes, rehearsal
 marks, a time signature change, or a passage transposed added to it, use the
-mcp-score MCP bridge tools instead (`add_live_notes`, `process_live_sequence`,
-`add_live_rehearsal_mark`, `set_live_time_signature`, `transpose_passage`,
-etc.) — they edit the live score directly, no file round-trip needed. See
-`docs/agent-playbook.md` for the verified capabilities of each live tool —
-**read it via its absolute path**,
-`C:\Users\GH200\mcp-score-workspace\mcp-score\docs\agent-playbook.md`. (If
-this skill loaded through the `~/.claude/skills/` junction, a relative
-link from here does NOT resolve correctly: Windows collapses `..` against
-the junction path before following it to the real directory, landing
-outside the repo — the absolute path always works regardless of which
-copy loaded.) Use this skill only for building a score **from scratch**
-as a new MusicXML file.
+**musescore-bridge** skill instead — it covers the mcp-score MCP bridge tools
+(`add_live_notes`, `process_live_sequence`, `add_live_rehearsal_mark`,
+`set_live_time_signature`, `transpose_passage`, etc.) that edit the live score
+directly, no file round-trip needed. Use this skill only for building a score
+**from scratch** as a new MusicXML file.
 
 ## Instructions
 
