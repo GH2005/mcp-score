@@ -114,7 +114,7 @@ src/mcp_score/
     dorico.py         Dorico defaults (thin subclass of RemoteControlBridge)
     sibelius.py       Sibelius defaults (thin subclass of RemoteControlBridge)
   musescore/
-    plugin.qml        MuseScore 4 QML plugin (WebSocket server)
+    mcp-score-bridge.qml  MuseScore 4 QML plugin (WebSocket server)
 
 .claude/skills/
   score-generate/     Claude Code skill for music21 score generation

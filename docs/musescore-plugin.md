@@ -34,7 +34,7 @@ To install manually instead:
 2. Copy the plugin file:
 
    ```bash
-   cp src/mcp_score/musescore/plugin.qml ~/Documents/MuseScore4/Plugins/mcp-score-bridge.qml
+   cp src/mcp_score/musescore/mcp-score-bridge.qml ~/Documents/MuseScore4/Plugins/mcp-score-bridge.qml
    ```
 
 3. In MuseScore, go to **Plugins > Plugin Manager** and enable "MCP Score Bridge"

@@ -101,15 +101,15 @@ def install_plugin() -> bool:
         sys.stderr.write(f"Error: unsupported platform '{system}'.\n")
         sys.stderr.write("Supported: macOS (Darwin), Linux, Windows.\n")
         sys.stderr.write(
-            "Manual install: copy src/mcp_score/musescore/plugin.qml"
+            "Manual install: copy src/mcp_score/musescore/mcp-score-bridge.qml"
             " to your MuseScore Plugins directory.\n"
         )
         return False
 
     try:
-        source = _package_path(str(Path("musescore") / "plugin.qml"))
+        source = _package_path(str(Path("musescore") / "mcp-score-bridge.qml"))
     except FileNotFoundError:
-        sys.stderr.write("Error: plugin.qml not found in package.\n")
+        sys.stderr.write("Error: mcp-score-bridge.qml not found in package.\n")
         return False
 
     destination = plugin_dir / "mcp-score-bridge.qml"

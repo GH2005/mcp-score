@@ -26,7 +26,7 @@ src/mcp_score/
     sibelius.py       Sibelius defaults (thin subclass of RemoteControlBridge)
   musicxml.py         MusicXML parsing/diffing (the ground-truth read path)
   musescore/
-    plugin.qml        MuseScore QML plugin (WebSocket server, 22 commands)
+    mcp-score-bridge.qml  MuseScore QML plugin (WebSocket server, 22 commands)
 
 .claude/skills/
   score-generate/     Claude Code skill for score generation via music21
