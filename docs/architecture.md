@@ -163,8 +163,9 @@ src/mcp_score/
     analysis.py         4 tools: read_passage, get_measure_content,
                                  get_selection_properties, export_live_score
     manipulation.py     11 tools: rehearsal marks, notes, time signatures, measures,
-                                 sequences, transpose, undo + guarded chords/barlines/keys/tempo
+                                 sequences, spelling, voices, undo + guarded chords/barlines/keys/tempo
   musicxml.py           MusicXML parsing/diffing (ground-truth read path)
+  theory.py             music21 theory: spelling, realization, analysis
   bridge/
     __init__.py         Bridge registry (get_active_bridge, set_active_bridge)
     base.py             ScoreBridge abstract base class
@@ -257,7 +258,9 @@ Manages which bridge is active. `get_active_bridge()` returns the current bridge
 | `set_live_time_signature` | Set the time signature (MuseScore)                    |
 | `append_live_measures`    | Append empty measures (MuseScore)                     |
 | `process_live_sequence`   | Batch plugin actions in one undo group (MuseScore)    |
-| `transpose_passage`       | Transpose by semitones (note-by-note on MuseScore)    |
+| `transpose_passage`       | Transpose, spelled with music21 (MuseScore)           |
+| `realize_harmony`         | Roman numeral / chord symbol to spelled pitches       |
+| `analyze_passage`         | Advisory: key, harmony, voice leading, ambitus        |
 | `add_live_chord_symbol`   | Add a chord symbol (guarded on MuseScore: crash)      |
 | `set_live_barline`        | Set a barline type (guarded on MuseScore: crash)      |
 | `set_live_key_signature`  | Set the key signature (guarded on MuseScore: corrupt) |

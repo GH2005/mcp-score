@@ -68,9 +68,15 @@ comm -23 <(sed -n 's/.*case "\([A-Za-z]*\)":[[:space:]]*return handle.*/\1/p' $Q
 ```
 
 Record the three lists as the campaign checklist before touching anything.
-Counts at last audit (2026-07-22): 22 wire commands, 15 sequence actions,
-23 MCP tools. Treat those as a staleness signal, not as the answer —
-re-derive them.
+Counts at last audit (2026-07-24, plugin 0.3.0): 23 wire commands, 15
+sequence actions, 25 MCP tools. Treat those as a staleness signal, not as
+the answer — re-derive them.
+
+**Musical logic belongs in Python, not QML.** The plugin is deliberately
+theory-free: it stores pitches and spellings (tpc integers) that
+`mcp_score.theory` computes with music21. If an audit finds the QML
+deciding what a note should be _called_, or what a figure means, that is
+a defect to move server-side, not a feature to extend.
 
 ## Phase 2 — Stand up the rig
 
@@ -169,8 +175,16 @@ uv run pytest -m live tests/live -q   # needs MuseScore + dock
 
 - `npx`/`node` are not on PATH; the `nodejs-bin` PyPI wrapper above is how
   prettier runs here.
-- A bare `python` is the Microsoft Store stub. Use `uv run python`.
-- `gh` is not installed. For PRs against the fork, use the git-credential
-  token with `curl` against the GitHub REST API.
+- A bare `python` is the Microsoft Store stub. Use `uv run python` or
+  `.venv/Scripts/python.exe`.
+- `uv sync` fails while an MCP client is running (`mcp-score.exe` is
+  locked). Use `uv lock` plus `uv pip install <pkg>`, and `uv run
+--no-sync` for tests.
+- The pre-push hook runs bare `pytest` and `pyright`: activate the venv
+  (`.venv\Scripts\Activate.ps1`) or prepend `.venv/Scripts` to PATH, and
+  never bypass the hook with `--no-verify`.
+- `gh` is installed and authenticated as GH2005, with the default repo
+  pinned to `GH2005/mcp-score`. **All PRs stay inside that fork** — never
+  target the upstream author's repository.
 - Shell working directory can reset between turns — use absolute paths or
   `cd` into the repo in each call.

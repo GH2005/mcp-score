@@ -106,7 +106,9 @@ src/mcp_score/
   tools/
     connection.py     Connect/disconnect MuseScore, Dorico & Sibelius, ping, score info
     analysis.py       Score reading tools (read_passage, get_measure_content, get_selection_properties)
-    manipulation.py   Score modification tools (barlines, chords, keys, tempo, transpose, undo)
+    manipulation.py   Score modification tools (spelled notes, chords, voices, transpose, undo)
+  musicxml.py         MusicXML parsing/diffing (ground-truth read path)
+  theory.py           music21 theory: spelling, realization, analysis
   bridge/
     base.py           ScoreBridge abstract base class
     remote_control.py Shared Remote Control protocol (Dorico & Sibelius)
@@ -142,6 +144,9 @@ The skill is bundled with the pip package so users can install it with `mcp-scor
 - **music21** for programmatic score generation
 - **Skill over MCP for generation** — one script vs. dozens of tool calls
 - **MCP for live manipulation** — WebSocket bridge to MuseScore
+- **No music theory in the plugin** — the QML stores pitches and spellings
+  (tpc integers); every musical decision is made server-side by music21 in
+  `src/mcp_score/theory.py`. Note names do not exist on the wire.
 - **Python** — music21 is Python-only and MCP SDK has first-class Python support
 
 See [docs/architecture.md](docs/architecture.md) for the full rationale.

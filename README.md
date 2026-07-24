@@ -52,7 +52,7 @@ mcp-score has three components that work together:
 
 ### MCP server
 
-A Python MCP server with 23 tools for live score manipulation across MuseScore, Dorico, and Sibelius: connect/disconnect, ground-truth score reads and exports, batch note entry, time signatures, rehearsal marks, transposition, and more. Commands that MuseScore Studio 4.7.4 cannot execute safely (barlines, chord symbols, key signatures, tempo marks) are guarded with explanatory errors -- see the [agent playbook](docs/agent-playbook.md) for the verified support matrix. Runs via `mcp-score serve` (or just `mcp-score`).
+A Python MCP server with 25 tools for live score manipulation across MuseScore, Dorico, and Sibelius: connect/disconnect, ground-truth score reads and exports, note entry with explicit enharmonic spelling (chords, voices, rests), time signatures, rehearsal marks, music21-spelled transposition, and advisory harmonic analysis. Commands that MuseScore Studio 4.7.4 cannot execute safely (barlines, chord symbols, key signatures, tempo marks) are guarded with explanatory errors -- see the [agent playbook](docs/agent-playbook.md) for the verified support matrix. Runs via `mcp-score serve` (or just `mcp-score`).
 
 ### Score generation skill
 

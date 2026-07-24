@@ -16,8 +16,9 @@ src/mcp_score/
   tools/
     connection.py     Connect/disconnect MuseScore, Dorico & Sibelius, ping, score info
     analysis.py       Ground-truth reads (exportScore + MusicXML parse) and export
-    manipulation.py   Modify live score (notes, time signatures, rehearsal marks,
-                      transpose, batch sequences; MuseScore-harmful commands guarded)
+    manipulation.py   Modify live score (spelled notes, chords, voices, rests, time
+                      signatures, rehearsal marks, transpose, batch sequences;
+                      MuseScore-harmful commands guarded)
   bridge/
     base.py           ScoreBridge abstract base class
     remote_control.py Shared Remote Control protocol (Dorico & Sibelius)
@@ -25,6 +26,8 @@ src/mcp_score/
     dorico.py         Dorico defaults (thin subclass of RemoteControlBridge)
     sibelius.py       Sibelius defaults (thin subclass of RemoteControlBridge)
   musicxml.py         MusicXML parsing/diffing (the ground-truth read path)
+  theory.py           music21 theory: spelling (tpc), harmonic realization,
+                      transposition planning, passage analysis
   musescore/
     mcp-score-bridge.qml  MuseScore QML plugin (WebSocket server, 22 commands)
 
@@ -90,8 +93,9 @@ MCP tools handle live score interaction (MuseScore, Dorico, or Sibelius):
 
 1. **Connection** — manage WebSocket bridges to MuseScore, Dorico, and Sibelius
 2. **Analysis** — read and understand musical content from the live score
-3. **Manipulation** — modify the live score (notes, time signatures, rehearsal
-   marks, transpose, batch sequences). Commands MuseScore Studio 4.7.4 cannot
+3. **Manipulation** — modify the live score (spelled notes, chords, voices,
+   rests, time signatures, rehearsal marks, transpose, batch sequences).
+   Commands MuseScore Studio 4.7.4 cannot
    execute safely (barlines, chord symbols, key signatures, tempo, undo) are
    guarded — read [docs/agent-playbook.md](docs/agent-playbook.md) before
    changing live-score behavior

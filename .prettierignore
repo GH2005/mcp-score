@@ -1,0 +1,9 @@
+# docs/agent-playbook.md is a symlink to
+# .claude/skills/musescore-bridge/agent-playbook.md (the real file, which
+# prettier does format). On Windows, git checks the symlink out as a plain
+# text file holding the target path -- prettier then "formats" that path by
+# appending a newline, which breaks the link on Linux and in CI.
+docs/agent-playbook.md
+
+# CLAUDE.md is a symlink to AGENTS.md, and has the same problem.
+CLAUDE.md
