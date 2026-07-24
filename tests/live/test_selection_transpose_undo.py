@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import pytest
 
+from mcp_score.tools.manipulation import transpose_passage
 from tests.live import mxl
 
 if TYPE_CHECKING:
@@ -37,18 +39,9 @@ async def test_transpose_range_single_measure(
     assert "result" in await bridge.add_note(60, QUARTER)
     before = await snapshot("selcur-before")
 
-    reply = await bridge.send_command(
-        "transpose",
-        {
-            "semitones": 1,
-            "startMeasure": start,
-            "endMeasure": start,
-            "startStaff": 0,
-            "endStaff": 0,
-        },
-    )
-    assert reply.get("result", {}).get("semitones") == 1, f"transpose: {reply}"
-    assert reply["result"]["notesTransposed"] >= 1
+    reply = json.loads(await transpose_passage(start, start, 0, 1))
+    assert reply.get("success") is True, f"transpose_passage: {reply}"
+    assert reply["notes_transposed"] >= 1
 
     after = await snapshot("selcur-after")
     changes = mxl.diff_snapshots(before, after)
@@ -72,22 +65,13 @@ async def test_transpose_range_confined_to_range(
     assert "result" in await bridge.add_note(64, QUARTER)
     before = await snapshot("selrange-before")
 
-    reply = await bridge.send_command(
-        "transpose",
-        {
-            "semitones": 2,
-            "startMeasure": start,
-            "endMeasure": start + 1,
-            "startStaff": 0,
-            "endStaff": 0,
-        },
-    )
-    assert "result" in reply, f"transpose failed: {reply}"
+    reply = json.loads(await transpose_passage(start, start + 1, 0, 2))
+    assert reply.get("success") is True, f"transpose_passage failed: {reply}"
 
     after = await snapshot("selrange-after")
     changes = mxl.diff_snapshots(before, after)
     assert set(changes) == {f"s0m{start}", f"s0m{start + 1}"}, (
-        f"transpose leaked outside the selected range: {set(changes)}"
+        f"transpose leaked outside the requested range: {set(changes)}"
     )
     for measure, expected_midi in ((start, 62), (start + 1, 64)):
         notes = [
@@ -98,31 +82,30 @@ async def test_transpose_range_confined_to_range(
         assert [e["midi"] for e in notes] == [[expected_midi]]
 
 
-@pytest.mark.xfail(
-    reason="selection.selectRange does not produce an active selection in "
-    "MuseScore 4.7.4 (selection.elements stays empty), so selection-based "
-    "transposition cannot work. Use the ranged transpose parameters "
-    "instead.",
-    strict=True,
-)
-async def test_selection_based_transpose(
-    bridge: MuseScoreBridge, scratch: ScratchFn
+async def test_transpose_into_a_flat_key_spells_flats(
+    bridge: MuseScoreBridge, scratch: ScratchFn, snapshot: SnapshotFn
 ) -> None:
+    """The point of routing transposition through music21.
+
+    A fixed per-semitone table sharpens everything; music21 picks the
+    spelling that suits the interval. G + 3 semitones is B-flat, not
+    A-sharp.
+    """
     start, _ = await scratch(1)
     await _at(bridge, start)
-    assert "result" in await bridge.add_note(60, QUARTER)
-    reply = await bridge.send_command(
-        "selectCustomRange",
-        {
-            "startMeasure": start,
-            "endMeasure": start,
-            "startStaff": 0,
-            "endStaff": 0,
-        },
-    )
-    assert "result" in reply
-    reply = await bridge.send_command("transpose", {"semitones": 1})
-    assert "result" in reply, f"selection-based transpose failed: {reply}"
+    assert "result" in await bridge.add_note(67, QUARTER)  # G4
+    before = await snapshot("flatkey-before")
+
+    reply = json.loads(await transpose_passage(start, start, 0, 3))
+    assert reply.get("success") is True, f"transpose_passage failed: {reply}"
+
+    after = await snapshot("flatkey-after")
+    changes = mxl.diff_snapshots(before, after)
+    notes = [
+        e for e in changes[f"s0m{start}"]["after"]["events"] if e["kind"] != "rest"
+    ]
+    assert [e["midi"] for e in notes] == [[70]]
+    assert notes[0]["names"] == ["B-4"], "expected B-flat, not A-sharp"
 
 
 async def test_select_custom_range_invalid_ranges_return_errors(
@@ -155,17 +138,8 @@ async def test_transpose_octave_up(
     assert "result" in await bridge.add_note(60, QUARTER)
     before = await snapshot("octave-before")
 
-    reply = await bridge.send_command(
-        "transpose",
-        {
-            "semitones": 13,
-            "startMeasure": start,
-            "endMeasure": start,
-            "startStaff": 0,
-            "endStaff": 0,
-        },
-    )
-    assert "result" in reply, f"transpose failed: {reply}"
+    reply = json.loads(await transpose_passage(start, start, 0, 13))
+    assert reply.get("success") is True, f"transpose_passage failed: {reply}"
 
     after = await snapshot("octave-after")
     changes = mxl.diff_snapshots(before, after)

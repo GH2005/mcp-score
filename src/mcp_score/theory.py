@@ -265,15 +265,19 @@ def transpose_pitch_tpc(midi: int, tpc: int, semitones: int) -> tuple[int, int]:
 def musescore_voice(event: dict[str, Any]) -> int:
     """Map a snapshot event's voice to MuseScore's 0-indexed voice.
 
-    MusicXML (and music21) number voices from 1; MuseScore numbers them
-    from 0. A measure with a single voice carries no voice marker at all,
-    which means voice 0.
+    MusicXML numbers voices from 1 and numbers them across a whole part,
+    so a two-staff piano uses 1-4 for the upper staff and 5-8 for the
+    lower one -- while MuseScore numbers voices 0-3 within *each* staff.
+    Taking the remainder maps both staves back onto 0-3.
+
+    A measure with a single voice carries no voice marker at all, which
+    means voice 0.
     """
     raw = event.get("voice")
     if raw is None:
         return 0
     try:
-        return int(raw) - 1
+        return (int(raw) - 1) % 4
     except (TypeError, ValueError):
         return 0
 

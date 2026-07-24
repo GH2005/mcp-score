@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from mcp_score import theory
 from tests.live import mxl
 
 if TYPE_CHECKING:
@@ -89,11 +90,16 @@ async def test_get_cursor_info_computes_beat(
     assert info["result"]["beat"] == 1
 
 
-async def test_get_cursor_info_reports_note_names(
+async def test_get_cursor_info_reports_pitch_and_spelling(
     bridge: MuseScoreBridge, scratch: ScratchFn
 ) -> None:
+    """The plugin reports raw (pitch, tpc); the server renders the name.
+
+    Note names are a music21 concern -- the plugin holds no theory, so it
+    sends the numbers and mcp_score.theory turns them into "C4".
+    """
     start, _ = await scratch(1)
-    await bridge.go_to_staff(0)
+    await bridge.go_to_staff(0, voice=0)
     await bridge.go_to_measure(start)
     reply = await bridge.add_note(60, {"numerator": 1, "denominator": 4})
     assert "result" in reply, f"addNote failed: {reply}"
@@ -102,4 +108,7 @@ async def test_get_cursor_info_reports_note_names(
     info = await bridge.get_cursor_info()
     element = info["result"]["element"]
     assert element is not None
-    assert [n["name"] for n in element.get("notes", [])] == ["C4"]
+    notes = element.get("notes", [])
+    assert [n["pitch"] for n in notes] == [60]
+    rendered = [theory.pitch_tpc_to_name(n["pitch"], n["tpc"])["name"] for n in notes]
+    assert rendered == ["C4"]
