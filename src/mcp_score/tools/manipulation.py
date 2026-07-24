@@ -2,10 +2,18 @@
 
 from typing import Any
 
+from mcp_score import theory
 from mcp_score.app import mcp
 from mcp_score.bridge import ScoreBridge
 from mcp_score.bridge.musescore import MuseScoreBridge
-from mcp_score.tools import NOT_CONNECTED, check_measure, connected_bridge, to_json
+from mcp_score.theory import plan_transposition
+from mcp_score.tools import (
+    NOT_CONNECTED,
+    check_measure,
+    connected_bridge,
+    export_snapshot,
+    to_json,
+)
 
 __all__: list[str] = []
 
@@ -177,14 +185,24 @@ async def transpose_passage(
     end_measure: int,
     staff: int,
     semitones: int,
+    voice: int | None = None,
 ) -> str:
-    """Transpose a passage by a number of semitones in the live score.
+    """Transpose a passage in the live score, spelling it musically.
+
+    Each note's new spelling is chosen by music21 rather than by a fixed
+    per-semitone table, so a passage transposed into a flat key comes out
+    with flats. The passage is read from a MusicXML snapshot first, the
+    new pitches are computed here, and the plugin verifies every note
+    still matches before it writes anything — a passage that changed since
+    the read fails whole rather than half-transposed.
 
     Args:
         start_measure: First measure (1-indexed).
         end_measure: Last measure (inclusive, 1-indexed).
         staff: Staff index (0-indexed).
-        semitones: Number of semitones to transpose (positive = up, negative = down).
+        semitones: Semitones to transpose (positive = up, negative = down).
+        voice: Voice to transpose (0-3). Omit to transpose every voice on
+            the staff.
     """
     bridge = connected_bridge()
     if bridge is None:
@@ -203,21 +221,66 @@ async def transpose_passage(
         return error
     if end_measure < start_measure:
         return to_json({"error": "end_measure must be >= start_measure."})
+    if voice is not None and not 0 <= voice <= 3:
+        return to_json({"error": "voice must be 0-3."})
 
-    # Single ranged transpose message: the plugin walks the range with a
-    # cursor. (Selection-based transposition is unreliable in MuseScore 4:
-    # selectRange does not produce an active selection there.)
-    result = await bridge.send_command(
-        "transpose",
-        {
-            "semitones": semitones,
-            "startMeasure": start_measure,
-            "endMeasure": end_measure,
-            "startStaff": staff,
-            "endStaff": staff,
-        },
+    snapshot, export_error = await export_snapshot(bridge)
+    if snapshot is None:
+        return to_json({"error": export_error})
+    if end_measure > snapshot["measure_count"]:
+        return to_json(
+            {
+                "error": f"end_measure {end_measure} out of range "
+                f"(score has {snapshot['measure_count']} measures)."
+            }
+        )
+
+    plans = plan_transposition(
+        snapshot, staff, start_measure, end_measure, semitones, voice
     )
-    return to_json(result)
+    if isinstance(plans, str):
+        return to_json({"error": plans})
+    if not plans:
+        return to_json(
+            {
+                "success": True,
+                "notes_transposed": 0,
+                "detail": "No notes in that range.",
+            }
+        )
+
+    applied: list[dict[str, Any]] = []
+    for plan in plans:
+        reply = await bridge.set_pitches(
+            staff, plan["voice"], start_measure, end_measure, plan["edits"]
+        )
+        if "error" in reply:
+            return to_json(
+                {
+                    "error": reply["error"],
+                    "voice": plan["voice"],
+                    "applied_voices": applied,
+                }
+            )
+        result = reply.get("result", {})
+        applied.append(
+            {
+                "voice": plan["voice"],
+                "notes": result.get("notesChanged", len(plan["edits"])),
+            }
+        )
+
+    return to_json(
+        {
+            "success": True,
+            "start_measure": start_measure,
+            "end_measure": end_measure,
+            "staff": staff,
+            "semitones": semitones,
+            "notes_transposed": sum(v["notes"] for v in applied),
+            "voices": applied,
+        }
+    )
 
 
 @mcp.tool()
@@ -283,21 +346,39 @@ async def append_live_measures(count: int = 1) -> str:
 
 
 @mcp.tool()
-async def add_live_notes(measure: int, staff: int, notes: list[dict[str, int]]) -> str:
-    """Write a run of notes into the live score (MuseScore only).
+async def add_live_notes(
+    measure: int,
+    staff: int,
+    notes: list[dict[str, Any]],
+    voice: int = 0,
+) -> str:
+    """Write notes, chords and rests into the live score (MuseScore only).
 
-    Notes are written consecutively starting at beat 1 of the given
-    measure — each note advances the insertion point by its duration,
-    spilling into following measures when the run is longer than the
-    measure. Existing content at those beats is REPLACED. The whole run
-    executes as a single batch (one undo group).
+    Entries are written consecutively starting at beat 1 of the given
+    measure — each advances the insertion point by its duration, spilling
+    into following measures when the run is longer than the measure.
+    Existing content at those beats is REPLACED. The whole run executes as
+    a single batch (one undo group).
 
     Args:
         measure: Starting measure (1-indexed).
         staff: Staff index (0-indexed).
-        notes: Each note is {"pitch": <0-127 MIDI>, "numerator": 1,
-            "denominator": 4}; numerator/denominator describe the
-            duration and default to a quarter note.
+        notes: Each entry carries a duration (``"numerator"`` and
+            ``"denominator"``, default 1/4) plus one of:
+
+            - ``{"name": "E-4"}`` — a spelled note. **Prefer this.** Use
+              ``-`` or ``b`` for flats (``"E-4"``/``"Eb4"``), ``#`` for
+              sharps. The spelling is preserved exactly, so an ascending
+              C-sharp stays a C-sharp and a descending D-flat stays a
+              D-flat.
+            - ``{"chord": ["C4", "E-4", "G4"]}`` — simultaneous notes.
+            - ``{"pitch": 61}`` — a bare MIDI number. Pass ``key`` (e.g.
+              ``{"pitch": 61, "key": "E-"}``) to spell it for that key,
+              otherwise music21's default spelling is used.
+            - ``{"rest": true}`` — a rest.
+
+        voice: Voice within the staff (0-3, default 0). Voice 1 is the
+            second voice — how independent lines are written on one staff.
     """
     bridge = connected_bridge()
     if bridge is None:
@@ -308,37 +389,101 @@ async def add_live_notes(measure: int, staff: int, notes: list[dict[str, int]]) 
         return error
     if staff < 0:
         return to_json({"error": "staff must be >= 0."})
+    if not 0 <= voice <= 3:
+        return to_json({"error": "voice must be 0-3."})
     if not notes:
         return to_json({"error": "notes must be a non-empty list."})
     assert isinstance(bridge, MuseScoreBridge)
 
     steps: list[dict[str, Any]] = [
-        {"action": "goToStaff", "params": {"staff": staff}},
+        {"action": "goToStaff", "params": {"staff": staff, "voice": voice}},
         {"action": "goToMeasure", "params": {"measure": measure}},
     ]
     for index, entry in enumerate(notes):
-        pitch = entry.get("pitch")
-        if not isinstance(pitch, int) or not 0 <= pitch <= 127:
-            return to_json({"error": f"notes[{index}].pitch must be a MIDI int 0-127."})
-        numerator = entry.get("numerator", 1)
-        denominator = entry.get("denominator", 4)
-        if numerator < 1 or denominator < 1:
-            return to_json({"error": f"notes[{index}] duration values must be >= 1."})
-        steps.append(
-            {
-                "action": "addNote",
-                "params": {
-                    "pitch": pitch,
-                    "duration": {
-                        "numerator": numerator,
-                        "denominator": denominator,
-                    },
-                },
-            }
-        )
+        compiled = _compile_entry(entry, index)
+        if isinstance(compiled, str):
+            return to_json({"error": compiled})
+        steps.extend(compiled)
 
     result = await bridge.process_sequence(steps)
     return to_json(result)
+
+
+def _compile_entry(entry: dict[str, Any], index: int) -> list[dict[str, Any]] | str:
+    """Turn one add_live_notes entry into plugin steps, or return an error.
+
+    Note names are resolved to (pitch, tpc) here — music21 owns the
+    spelling decision, the plugin only stores the result.
+    """
+    numerator = entry.get("numerator", 1)
+    denominator = entry.get("denominator", 4)
+    if not isinstance(numerator, int) or not isinstance(denominator, int):
+        return f"notes[{index}] duration values must be integers."
+    if numerator < 1 or denominator < 1:
+        return f"notes[{index}] duration values must be >= 1."
+    duration = {"numerator": numerator, "denominator": denominator}
+
+    if entry.get("rest") is True:
+        return [{"action": "addRest", "params": {"duration": duration}}]
+
+    chord = entry.get("chord")
+    if chord is not None:
+        if not isinstance(chord, list) or not chord:
+            return f"notes[{index}].chord must be a non-empty list of note names."
+        steps: list[dict[str, Any]] = []
+        for position, name in enumerate(chord):
+            resolved = _resolve_pitch({"name": name}, index)
+            if isinstance(resolved, str):
+                return resolved
+            params: dict[str, Any] = {
+                "pitch": resolved["midi"],
+                "tpc": resolved["tpc"],
+                "duration": duration,
+            }
+            if position > 0:
+                params["addToChord"] = True
+            steps.append({"action": "addNote", "params": params})
+        return steps
+
+    resolved = _resolve_pitch(entry, index)
+    if isinstance(resolved, str):
+        return resolved
+    return [
+        {
+            "action": "addNote",
+            "params": {
+                "pitch": resolved["midi"],
+                "tpc": resolved["tpc"],
+                "duration": duration,
+            },
+        }
+    ]
+
+
+def _resolve_pitch(entry: dict[str, Any], index: int) -> theory.SpelledPitch | str:
+    """Resolve a name or MIDI entry to a spelled pitch, or an error string."""
+    name = entry.get("name")
+    if name is not None:
+        if not isinstance(name, str):
+            return f"notes[{index}].name must be a string like 'E-4'."
+        try:
+            return theory.name_to_pitch_tpc(name)
+        except ValueError as exception:
+            return f"notes[{index}]: {exception}"
+
+    pitch = entry.get("pitch")
+    if pitch is None:
+        return (
+            f"notes[{index}] needs one of: name, chord, pitch, or rest. "
+            "Prefer 'name' (e.g. 'E-4') so the spelling is unambiguous."
+        )
+    if not isinstance(pitch, int) or not 0 <= pitch <= 127:
+        return f"notes[{index}].pitch must be a MIDI int 0-127."
+    key_context = entry.get("key")
+    try:
+        return theory.spell_midi(pitch, key_context if key_context else None)
+    except ValueError as exception:
+        return f"notes[{index}]: {exception}"
 
 
 @mcp.tool()

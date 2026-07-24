@@ -22,12 +22,15 @@ async def test_ping_returns_pong(bridge: MuseScoreBridge) -> None:
     assert reply == {"result": "pong"}
 
 
-async def test_transpose_without_selection_returns_error(
-    bridge: MuseScoreBridge,
-) -> None:
+async def test_wire_transpose_is_gone(bridge: MuseScoreBridge) -> None:
+    """Transposition moved to the server, which spells it with music21.
+
+    The plugin holds no music theory: it applies pitch + tpc edits via
+    setPitches and nothing else.
+    """
     reply = await bridge.send_command("transpose", {"semitones": 1})
     assert "error" in reply
-    assert "No active selection" in reply["error"]
+    assert "Unknown command" in reply["error"]
 
 
 async def test_get_score_reports_expected_shape(bridge: MuseScoreBridge) -> None:
@@ -52,7 +55,7 @@ async def test_get_score_reports_plugin_version(
 ) -> None:
     """Stale-plugin detection: getScore must carry the plugin version."""
     reply = await bridge.get_score()
-    assert reply["result"].get("pluginVersion") == "0.2.0"
+    assert reply["result"].get("pluginVersion") == "0.3.0"
 
 
 async def test_get_score_parts_include_staff_ranges(

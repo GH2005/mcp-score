@@ -164,23 +164,95 @@ class MuseScoreBridge(ScoreBridge):
         """Navigate to a specific measure (1-indexed)."""
         return await self.send_command("goToMeasure", {"measure": measure})
 
-    async def go_to_staff(self, staff: int) -> dict[str, Any]:
-        """Navigate to a specific staff (0-indexed)."""
-        return await self.send_command("goToStaff", {"staff": staff})
+    async def go_to_staff(self, staff: int, voice: int | None = None) -> dict[str, Any]:
+        """Navigate to a specific staff (0-indexed) and optionally a voice.
+
+        Args:
+            staff: Staff index (0-indexed).
+            voice: Voice within the staff (0-3). ``None`` keeps the
+                current voice.
+        """
+        params: dict[str, Any] = {"staff": staff}
+        if voice is not None:
+            params["voice"] = voice
+        return await self.send_command("goToStaff", params)
 
     async def add_note(
         self,
         pitch: int,
         duration: dict[str, int],
         advance_cursor: bool = True,
+        add_to_chord: bool = False,
+        tpc: int | None = None,
     ) -> dict[str, Any]:
-        """Add a note at the current cursor position."""
+        """Add a note at the current cursor position.
+
+        Args:
+            pitch: MIDI pitch (0-127).
+            duration: ``{"numerator": n, "denominator": d}``.
+            advance_cursor: Move the cursor past the note afterwards.
+            add_to_chord: Stack onto the previous note instead of
+                advancing, building a chord.
+            tpc: MuseScore tonal pitch class -- the note's spelling. Send
+                it whenever the spelling matters: without it MuseScore
+                guesses from the key signature. See
+                :func:`mcp_score.theory.name_to_pitch_tpc`.
+        """
+        params: dict[str, Any] = {
+            "pitch": pitch,
+            "duration": duration,
+            "advanceCursorAfterAction": advance_cursor,
+        }
+        if add_to_chord:
+            params["addToChord"] = True
+        if tpc is not None:
+            params["tpc"] = tpc
+        return await self.send_command("addNote", params)
+
+    async def add_rest(
+        self,
+        duration: dict[str, int],
+        advance_cursor: bool = True,
+    ) -> dict[str, Any]:
+        """Add a rest at the current cursor position."""
         return await self.send_command(
-            "addNote",
+            "addRest",
             {
-                "pitch": pitch,
                 "duration": duration,
                 "advanceCursorAfterAction": advance_cursor,
+            },
+        )
+
+    async def set_pitches(
+        self,
+        staff: int,
+        voice: int,
+        start_measure: int,
+        end_measure: int,
+        edits: list[dict[str, int]],
+    ) -> dict[str, Any]:
+        """Rewrite the pitch and spelling of notes already in the score.
+
+        Each edit is ``{"oldPitch": int, "newPitch": int, "newTpc": int}``
+        and applies positionally: edit N addresses the Nth note of the
+        staff+voice across the measure range, ordered by tick and then by
+        ascending pitch within a chord. The plugin verifies every
+        ``oldPitch`` before writing anything, so a request built from a
+        stale snapshot fails whole instead of half-applying.
+
+        ``newTpc`` is required alongside ``newPitch``: MuseScore exports a
+        note's spelling rather than its MIDI number, so changing one
+        without the other produces a note that still exports as the old
+        pitch.
+        """
+        return await self.send_command(
+            "setPitches",
+            {
+                "staff": staff,
+                "voice": voice,
+                "startMeasure": start_measure,
+                "endMeasure": end_measure,
+                "edits": edits,
             },
         )
 

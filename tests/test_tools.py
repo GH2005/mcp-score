@@ -670,9 +670,14 @@ class TestCompositionTools:
         # Assert
         assert "error" not in result
         steps = mock_bridge.process_sequence.call_args.args[0]
-        assert steps[0] == {"action": "goToStaff", "params": {"staff": 1}}
+        assert steps[0] == {
+            "action": "goToStaff",
+            "params": {"staff": 1, "voice": 0},
+        }
         assert steps[1] == {"action": "goToMeasure", "params": {"measure": 3}}
         assert steps[2]["params"]["pitch"] == 60
+        # Every note now carries an explicit spelling: MIDI 60 is C4 (tpc 14).
+        assert steps[2]["params"]["tpc"] == 14
         assert steps[2]["params"]["duration"] == {"numerator": 1, "denominator": 4}
         assert steps[3]["params"]["duration"] == {"numerator": 1, "denominator": 2}
 
@@ -768,20 +773,19 @@ class TestGetSelectionProperties:
 class TestTransposePassageErrorBranch:
     @pytest.mark.anyio()
     async def test_transpose_propagates_plugin_error(self) -> None:
-        # Arrange
+        # Arrange — the read succeeds, the write is refused by the plugin.
         from mcp_score.tools.manipulation import transpose_passage
 
-        mock_bridge = AsyncMock(spec=MuseScoreBridge)
-        mock_bridge.is_connected = True
-        mock_bridge.send_command = AsyncMock(return_value={"error": "Invalid range"})
+        mock_bridge = _musescore_bridge_with_fixture_export()
+        mock_bridge.set_pitches = AsyncMock(return_value={"error": "Invalid range"})
 
         with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
             # Act
-            result = json.loads(await transpose_passage(1, 4, 0, 5))
+            result = json.loads(await transpose_passage(1, 2, 0, 5))
 
         # Assert — the plugin's error comes straight back
         assert result["error"] == "Invalid range"
-        assert mock_bridge.send_command.call_count == 1
+        assert mock_bridge.set_pitches.call_count == 1
 
 
 # ── Manipulation tool tests ──────────────────────────────────────────
@@ -951,31 +955,29 @@ class TestManipulationHappyPaths:
         assert result["result"] == "ok"
 
     @pytest.mark.anyio()
-    async def test_transpose_sends_single_ranged_command(
-        self,
-    ) -> None:
-        # Arrange
+    async def test_transpose_sends_spelled_pitch_edits(self) -> None:
+        # Arrange — fixture score is C4, E4 (m1) then G4 (m2), all voice 0.
         from mcp_score.tools.manipulation import transpose_passage
 
-        mock_bridge = AsyncMock(spec=MuseScoreBridge)
-        mock_bridge.is_connected = True
-        mock_bridge.send_command = AsyncMock(return_value={"result": "ok"})
+        mock_bridge = _musescore_bridge_with_fixture_export()
+        mock_bridge.set_pitches = AsyncMock(
+            return_value={"result": {"notesChanged": 3}}
+        )
 
         with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
-            # Act
-            await transpose_passage(1, 8, 0, 5)
+            # Act — up a whole tone: C-E-G becomes D-F#-A.
+            result = json.loads(await transpose_passage(1, 2, 0, 2))
 
-        # Assert — one ranged transpose message, no selection round-trip
-        assert mock_bridge.send_command.call_count == 1
-        transpose_call = mock_bridge.send_command.call_args_list[0]
-        assert transpose_call.args[0] == "transpose"
-        assert transpose_call.args[1] == {
-            "semitones": 5,
-            "startMeasure": 1,
-            "endMeasure": 8,
-            "startStaff": 0,
-            "endStaff": 0,
-        }
+        # Assert — the server computes pitch AND spelling, per voice.
+        assert result["success"] is True
+        assert mock_bridge.set_pitches.call_count == 1
+        staff, voice, start, end, edits = mock_bridge.set_pitches.call_args.args
+        assert (staff, voice, start, end) == (0, 0, 1, 2)
+        assert edits == [
+            {"oldPitch": 60, "newPitch": 62, "newTpc": 16},  # C4 -> D4
+            {"oldPitch": 64, "newPitch": 66, "newTpc": 20},  # E4 -> F#4
+            {"oldPitch": 67, "newPitch": 69, "newTpc": 17},  # G4 -> A4
+        ]
 
     @pytest.mark.anyio()
     async def test_set_barline_navigates_and_delegates(self) -> None:
@@ -1076,15 +1078,16 @@ class TestEdgeCases:
         """start == end is a valid single-measure transpose."""
         from mcp_score.tools.manipulation import transpose_passage
 
-        mock_bridge = AsyncMock(spec=MuseScoreBridge)
-        mock_bridge.is_connected = True
-        mock_bridge.send_command = AsyncMock(return_value={"result": "ok"})
+        mock_bridge = _musescore_bridge_with_fixture_export()
+        mock_bridge.set_pitches = AsyncMock(
+            return_value={"result": {"notesChanged": 2}}
+        )
 
         with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
-            result = json.loads(await transpose_passage(5, 5, 0, 2))
+            result = json.loads(await transpose_passage(1, 1, 0, 2))
 
         assert "error" not in result
-        assert mock_bridge.send_command.call_count == 1
+        assert mock_bridge.set_pitches.call_count == 1
 
 
 class TestBridgeTypeGuards:
@@ -1154,15 +1157,228 @@ class TestNavigationErrorHandling:
         # Arrange
         from mcp_score.tools.manipulation import transpose_passage
 
-        mock_bridge = AsyncMock(spec=MuseScoreBridge)
-        mock_bridge.is_connected = True
-        mock_bridge.send_command = AsyncMock(
-            return_value={"error": "Invalid measure range: 99-100"}
-        )
+        mock_bridge = _musescore_bridge_with_fixture_export()
+        mock_bridge.set_pitches = AsyncMock()
 
         with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
-            # Act
+            # Act — the fixture score only has 2 measures.
             result = json.loads(await transpose_passage(99, 100, 0, 2))
 
-        # Assert — range validation happens in the plugin's ranged handler
+        # Assert — caught against the snapshot, before anything is written
+        assert "out of range" in result["error"]
+        mock_bridge.set_pitches.assert_not_called()
+
+
+class TestSpelledWriting:
+    """add_live_notes: spelled names, chords, rests, and voices."""
+
+    @staticmethod
+    def _bridge() -> AsyncMock:
+        bridge = AsyncMock(spec=MuseScoreBridge)
+        bridge.is_connected = True
+        bridge.process_sequence = AsyncMock(return_value={"result": {"count": 1}})
+        return bridge
+
+    @pytest.mark.anyio()
+    async def test_named_note_carries_its_spelling(self) -> None:
+        from mcp_score.tools.manipulation import add_live_notes
+
+        mock_bridge = self._bridge()
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(await add_live_notes(1, 0, [{"name": "D-4"}]))
+
+        assert "error" not in result
+        steps = mock_bridge.process_sequence.call_args.args[0]
+        assert steps[2]["params"]["pitch"] == 61
+        assert steps[2]["params"]["tpc"] == 9  # D-flat, not C-sharp (21)
+
+    @pytest.mark.anyio()
+    async def test_flat_and_sharp_spellings_differ_on_the_wire(self) -> None:
+        """The same MIDI pitch reaches MuseScore with a different tpc."""
+        from mcp_score.tools.manipulation import add_live_notes
+
+        sent: list[int] = []
+        for name in ("D-4", "C#4"):
+            mock_bridge = self._bridge()
+            with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+                await add_live_notes(1, 0, [{"name": name}])
+            params = mock_bridge.process_sequence.call_args.args[0][2]["params"]
+            assert params["pitch"] == 61
+            sent.append(params["tpc"])
+
+        assert sent[0] != sent[1]
+
+    @pytest.mark.anyio()
+    async def test_chord_stacks_with_add_to_chord(self) -> None:
+        from mcp_score.tools.manipulation import add_live_notes
+
+        mock_bridge = self._bridge()
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(
+                await add_live_notes(1, 0, [{"chord": ["C4", "E-4", "G4"]}])
+            )
+
+        assert "error" not in result
+        notes = mock_bridge.process_sequence.call_args.args[0][2:]
+        assert [step["params"]["pitch"] for step in notes] == [60, 63, 67]
+        # Only the first note starts the chord; the rest stack onto it.
+        assert "addToChord" not in notes[0]["params"]
+        assert all(step["params"]["addToChord"] is True for step in notes[1:])
+
+    @pytest.mark.anyio()
+    async def test_rest_entry_uses_add_rest(self) -> None:
+        from mcp_score.tools.manipulation import add_live_notes
+
+        mock_bridge = self._bridge()
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(
+                await add_live_notes(1, 0, [{"rest": True, "denominator": 2}])
+            )
+
+        assert "error" not in result
+        step = mock_bridge.process_sequence.call_args.args[0][2]
+        assert step["action"] == "addRest"
+        assert step["params"]["duration"] == {"numerator": 1, "denominator": 2}
+
+    @pytest.mark.anyio()
+    async def test_voice_is_passed_to_go_to_staff(self) -> None:
+        from mcp_score.tools.manipulation import add_live_notes
+
+        mock_bridge = self._bridge()
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            await add_live_notes(1, 0, [{"name": "G3"}], voice=1)
+
+        steps = mock_bridge.process_sequence.call_args.args[0]
+        assert steps[0]["params"]["voice"] == 1
+
+    @pytest.mark.anyio()
+    async def test_key_context_spells_a_bare_midi_pitch(self) -> None:
+        from mcp_score.tools.manipulation import add_live_notes
+
+        mock_bridge = self._bridge()
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            await add_live_notes(1, 0, [{"pitch": 68, "key": "E-"}])
+
+        # MIDI 68 in E-flat major is A-flat (tpc 10), not G-sharp (tpc 22).
+        assert mock_bridge.process_sequence.call_args.args[0][2]["params"]["tpc"] == 10
+
+    @pytest.mark.anyio()
+    async def test_rejects_out_of_range_voice(self) -> None:
+        from mcp_score.tools.manipulation import add_live_notes
+
+        mock_bridge = self._bridge()
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(await add_live_notes(1, 0, [{"name": "C4"}], voice=9))
+
+        assert "voice must be 0-3" in result["error"]
+        mock_bridge.process_sequence.assert_not_called()
+
+    @pytest.mark.anyio()
+    async def test_rejects_unparseable_name(self) -> None:
+        from mcp_score.tools.manipulation import add_live_notes
+
+        mock_bridge = self._bridge()
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(await add_live_notes(1, 0, [{"name": "H4"}]))
+
         assert "error" in result
+        mock_bridge.process_sequence.assert_not_called()
+
+    @pytest.mark.anyio()
+    async def test_rejects_entry_without_a_pitch_source(self) -> None:
+        from mcp_score.tools.manipulation import add_live_notes
+
+        mock_bridge = self._bridge()
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(await add_live_notes(1, 0, [{"denominator": 4}]))
+
+        assert "needs one of" in result["error"]
+
+
+class TestRealizeHarmony:
+    """realize_harmony: a harmonic intention becomes concrete pitches."""
+
+    @pytest.mark.anyio()
+    async def test_roman_numeral(self) -> None:
+        from mcp_score.tools.analysis import realize_harmony
+
+        result = json.loads(await realize_harmony("V7/V", "E-"))
+
+        assert result["success"] is True
+        assert result["chord_for_add_live_notes"] == ["F4", "A4", "C5", "E-5"]
+
+    @pytest.mark.anyio()
+    async def test_augmented_sixth_keeps_its_spelling(self) -> None:
+        from mcp_score.tools.analysis import realize_harmony
+
+        result = json.loads(await realize_harmony("Ger65", "c", 4))
+
+        names = result["chord_for_add_live_notes"]
+        assert any(n.startswith("F#") for n in names)
+        assert not any(n.startswith("G-") for n in names)
+
+    @pytest.mark.anyio()
+    async def test_needs_no_connection(self) -> None:
+        """Pure theory: it works with no score application attached."""
+        from mcp_score.tools.analysis import realize_harmony
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=None):
+            result = json.loads(await realize_harmony("I", "C"))
+
+        assert result["success"] is True
+
+    @pytest.mark.anyio()
+    async def test_unparseable_figure_errors(self) -> None:
+        from mcp_score.tools.analysis import realize_harmony
+
+        result = json.loads(await realize_harmony("not-a-chord", "C"))
+
+        assert "error" in result
+
+
+class TestAnalyzePassage:
+    """analyze_passage: advisory observations, never a verdict."""
+
+    @pytest.mark.anyio()
+    async def test_reports_key_harmony_and_ambitus(self) -> None:
+        from mcp_score.tools.analysis import analyze_passage
+
+        mock_bridge = _musescore_bridge_with_fixture_export()
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(await analyze_passage(1, 2))
+
+        assert result["success"] is True
+        assert "detected" in result["key"]
+        assert result["ambitus"][0]["lowest"] == "C4"
+        assert result["ambitus"][0]["highest"] == "G4"
+
+    @pytest.mark.anyio()
+    async def test_requested_key_overrides_detection(self) -> None:
+        from mcp_score.tools.analysis import analyze_passage
+
+        mock_bridge = _musescore_bridge_with_fixture_export()
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(await analyze_passage(1, 2, key="E-"))
+
+        assert result["key"]["used_for_harmony"] == "E- major"
+
+    @pytest.mark.anyio()
+    async def test_never_writes_to_the_score(self) -> None:
+        from mcp_score.tools.analysis import analyze_passage
+
+        mock_bridge = _musescore_bridge_with_fixture_export()
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            await analyze_passage(1, 2)
+
+        mock_bridge.process_sequence.assert_not_called()
+        mock_bridge.set_pitches.assert_not_called()
+        mock_bridge.add_note.assert_not_called()
+
+    @pytest.mark.anyio()
+    async def test_requires_connection(self) -> None:
+        from mcp_score.tools.analysis import analyze_passage
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=None):
+            result = json.loads(await analyze_passage(1, 2))
+
+        assert result["error"] == NOT_CONNECTED

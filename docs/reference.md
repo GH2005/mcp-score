@@ -4,7 +4,7 @@
 
 Score generation is handled by the `score-generate` Claude Code skill (not MCP tools). See the [skill documentation](../README.md#score-generation-skill) for usage.
 
-The MCP server provides 23 tools across 3 categories for live score manipulation. All tools work with any connected application — MuseScore, Dorico, or Sibelius — though some operations are limited or unavailable depending on what the application's API can execute safely. For MuseScore, the [agent playbook](agent-playbook.md) is the verified support matrix: several commands are guarded because MuseScore Studio 4.7.4 crashes or silently corrupts the score when they run.
+The MCP server provides 25 tools across 3 categories for live score manipulation. All tools work with any connected application — MuseScore, Dorico, or Sibelius — though some operations are limited or unavailable depending on what the application's API can execute safely. For MuseScore, the [agent playbook](agent-playbook.md) is the verified support matrix: several commands are guarded because MuseScore Studio 4.7.4 crashes or silently corrupts the score when they run.
 
 ## Connection tools (8)
 
@@ -61,7 +61,7 @@ Check if the connected score application is responsive. No parameters. Does not 
 
 ---
 
-## Analysis tools (4)
+## Analysis tools (6)
 
 Read musical content from the connected score application. All analysis tools require an active connection.
 
@@ -109,6 +109,33 @@ Get properties of the current selection in the connected application. Behaviour 
 - **Dorico / Sibelius**: Returns names, types, and values of all properties on the selected items via the Remote Control API's `getproperties` message. This is the closest the WebSocket API gets to reading score data, and is the recommended way to inspect content when connected to Dorico or Sibelius.
 
 No parameters. Requires an active connection.
+
+### `realize_harmony`
+
+Turn a harmonic intention into concrete, correctly spelled pitches — the "I want the dominant of the dominant" to "these four notes" step. Pure theory: **no score and no connection needed**.
+
+| Parameter | Type  | Default | Description                                                                                |
+| --------- | ----- | ------- | ------------------------------------------------------------------------------------------ |
+| `figure`  | `str` | —       | Roman numeral read in `key` (`"V7/V"`, `"bVII"`, `"Ger65"`) or a chord symbol (`"E-maj7"`) |
+| `key`     | `str` | —       | Key to read the figure in; uppercase major, lowercase minor (`"E-"`, `"c"`)                |
+| `octave`  | `int` | `4`     | Octave for the lowest note                                                                 |
+
+Use `-` for a flat root: `"B-7"` is B-flat dominant 7, while `"Bb7"` reads as B with a flat-7. The reply's `chord_for_add_live_notes` feeds straight into `add_live_notes` as a `chord` entry. music21 chooses the spelling, so a German augmented sixth comes back with a D-sharp rather than an E-flat.
+
+### `analyze_passage`
+
+Report what a passage is doing, musically. **Advisory only — it never edits and never blocks.**
+
+| Parameter       | Type  | Description                                                     |
+| --------------- | ----- | --------------------------------------------------------------- |
+| `start_measure` | `int` | First measure (1-indexed)                                       |
+| `end_measure`   | `int` | Last measure (inclusive, 1-indexed)                             |
+| `staff`         | `int` | Optional staff (0-indexed); omit to analyze all staves together |
+| `key`           | `str` | Optional key to read harmony in, instead of the detected one    |
+
+MuseScore only (it needs the MusicXML export). Reports the detected key, a roman-numeral reading of each simultaneity, voice-leading observations (parallel and hidden fifths/octaves, voice crossings) located by measure, and each staff's ambitus.
+
+Treat the output as observations to weigh, not corrections to apply: parallel fifths are an error in a chorale, the point in organum, and ordinary in power chords.
 
 ---
 
@@ -195,8 +222,9 @@ Transpose a passage by a number of semitones.
 | `end_measure`   | `int` | Last measure (inclusive, 1-indexed)                     |
 | `staff`         | `int` | Staff index (0-indexed)                                 |
 | `semitones`     | `int` | Semitones to transpose (positive = up, negative = down) |
+| `voice`         | `int` | Optional voice (0-3); omit to transpose every voice     |
 
-MuseScore only. Implemented note-by-note with correct enharmonic spelling (the plugin walks the range with a cursor; `curScore.transpose()` does not exist in MuseScore 4).
+MuseScore only. Reads a MusicXML snapshot, computes each new pitch **and its spelling** with music21, then applies verified positional edits via the plugin's `setPitches`. Transposing G up 3 semitones gives B-flat, not A-sharp. Every note's `oldPitch` is checked before anything is written, so a passage that changed since the read fails whole rather than half-transposed.
 
 ### `undo_last_action`
 
@@ -226,15 +254,23 @@ Append empty measures to the end of the score (MuseScore only).
 
 Write a run of notes starting at beat 1 of a measure (MuseScore only). Notes are written consecutively — each advances the insertion point by its duration, spilling into following measures — and REPLACE existing content at those beats. Executes atomically via the plugin's `processSequence`.
 
-| Parameter | Type         | Description                                                                                       |
-| --------- | ------------ | ------------------------------------------------------------------------------------------------- |
-| `measure` | `int`        | Starting measure (1-indexed)                                                                      |
-| `staff`   | `int`        | Staff index (0-indexed)                                                                           |
-| `notes`   | `list[dict]` | Each `{"pitch": <0-127 MIDI>, "numerator": 1, "denominator": 4}` (duration defaults to a quarter) |
+| Parameter | Type         | Description                                |
+| --------- | ------------ | ------------------------------------------ |
+| `measure` | `int`        | Starting measure (1-indexed)               |
+| `staff`   | `int`        | Staff index (0-indexed)                    |
+| `notes`   | `list[dict]` | See below (duration defaults to a quarter) |
+| `voice`   | `int`        | Voice within the staff (0-3, default 0)    |
+
+Each entry carries an optional duration (`"numerator"`, `"denominator"`) plus one of:
+
+- `{"name": "E-4"}` — a spelled note. **Prefer this.** `-` or `b` for flats, `#` for sharps. The spelling is preserved exactly, so an ascending C-sharp stays a C-sharp.
+- `{"chord": ["C4", "E-4", "G4"]}` — simultaneous notes.
+- `{"rest": true}` — a rest.
+- `{"pitch": 61}` — a bare MIDI number; add `"key": "E-"` to spell it for that key.
 
 ### `process_live_sequence`
 
-Execute a batch of plugin actions in one undo group (MuseScore only). Each step is `{"action": <name>, "params": {...}}`; supported actions: `ping`, `goToMeasure`, `goToStaff`, `addNote`, `addRehearsalMark`, `setTimeSignature`, `appendMeasures`, `selectCurrentMeasure`, `selectCustomRange`, `transpose`. Steps naming crash- or corruption-prone actions are rejected.
+Execute a batch of plugin actions in one undo group (MuseScore only). Each step is `{"action": <name>, "params": {...}}`; supported actions: `ping`, `goToMeasure`, `goToStaff`, `addNote`, `addRest`, `addRehearsalMark`, `setTimeSignature`, `appendMeasures`, `selectCurrentMeasure`, `selectCustomRange`. Steps naming crash- or corruption-prone actions are rejected.
 
 Note: rollback on failure is broken in MuseScore Studio 4.7.4 (the plugin undo is a no-op), so steps before a failure stay applied; the reply carries `failedIndex`/`failedAction`.
 

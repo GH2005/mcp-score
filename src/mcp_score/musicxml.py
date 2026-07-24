@@ -44,9 +44,25 @@ __all__ = [
 Snapshot = dict[str, Any]
 
 
+def _voice_ids(measure: stream.Measure) -> dict[int, str]:
+    """Map each element to the id of the Voice that *contains* it.
+
+    Only elements genuinely inside one of this measure's Voice containers
+    appear. Asking an element for its voice via ``getContextByClass``
+    instead would search back through earlier measures and label a
+    single-voice measure with a neighbour's voice id.
+    """
+    mapping: dict[int, str] = {}
+    for voice in measure.getElementsByClass(stream.Voice):
+        for element in voice.notesAndRests:
+            mapping[id(element)] = str(voice.id)
+    return mapping
+
+
 def _events(measure: stream.Measure) -> list[dict[str, Any]]:
     """Normalize the notes, chords, and rests of one measure."""
     events: list[dict[str, Any]] = []
+    voice_ids = _voice_ids(measure)
     for el in measure.recurse().notesAndRests:
         if isinstance(el, harmony.Harmony):
             continue  # chord symbols are reported separately
@@ -54,9 +70,9 @@ def _events(measure: stream.Measure) -> list[dict[str, Any]]:
             "offset": round(float(el.getOffsetInHierarchy(measure)), 4),
             "ql": round(float(el.duration.quarterLength), 4),
         }
-        voice = el.getContextByClass(stream.Voice)
-        if voice is not None:
-            entry["voice"] = str(voice.id)
+        voice_id = voice_ids.get(id(el))
+        if voice_id is not None:
+            entry["voice"] = voice_id
         if isinstance(el, chord.Chord):
             entry["kind"] = "chord" if len(el.pitches) > 1 else "note"
             entry["midi"] = sorted(p.midi for p in el.pitches)

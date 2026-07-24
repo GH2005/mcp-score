@@ -10,16 +10,24 @@ Sibelius (which expose no exporter over their Remote Control APIs).
 
 from __future__ import annotations
 
-import tempfile
 import uuid
 from pathlib import Path
 from typing import Any
 
+from mcp_score import theory
 from mcp_score.app import mcp
 from mcp_score.bridge.musescore import MuseScoreBridge
 from mcp_score.bridge.remote_control import RemoteControlBridge
-from mcp_score.musicxml import Snapshot, get_measure, parse_snapshot
-from mcp_score.tools import NOT_CONNECTED, check_measure, connected_bridge, to_json
+from mcp_score.musicxml import Snapshot, get_measure
+from mcp_score.tools import (
+    NOT_CONNECTED,
+    PLUGIN_OUTDATED_ERROR,
+    check_measure,
+    connected_bridge,
+    export_dir,
+    export_snapshot,
+    to_json,
+)
 
 __all__: list[str] = []
 
@@ -30,45 +38,10 @@ _REMOTE_CONTROL_ANALYSIS_WARNING = (
     "Dorico/Sibelius."
 )
 
-_PLUGIN_OUTDATED_ERROR = (
-    "The installed mcp-score-bridge plugin does not support the exportScore "
-    "command. Reinstall it with 'mcp-score install-plugin' and restart "
-    "MuseScore."
-)
-
 #: Formats writeScore() handles safely in MuseScore 4. "mscz" is excluded:
 #: in MuseScore Studio 4.7.4 it writes a 0-byte file, never replies, and
 #: raises a blocking modal dialog that must be dismissed by hand.
 _EXPORT_FORMATS = frozenset({"musicxml", "mxl", "xml", "pdf", "mid", "midi"})
-
-
-def _export_dir() -> Path:
-    directory = Path(tempfile.gettempdir()) / "mcp-score-exports"
-    directory.mkdir(exist_ok=True)
-    return directory
-
-
-async def _export_snapshot(
-    bridge: MuseScoreBridge,
-) -> tuple[Snapshot | None, str | None]:
-    """Snapshot the live score to a temp file and parse it.
-
-    Returns (snapshot, None) on success or (None, error message).
-    """
-    path = _export_dir() / f"read-{uuid.uuid4().hex}.musicxml"
-    reply = await bridge.export_score(path.as_posix(), "musicxml")
-    if "error" in reply:
-        error = str(reply["error"])
-        if "Unknown command" in error:
-            return None, _PLUGIN_OUTDATED_ERROR
-        return None, error
-    result = reply.get("result")
-    if not isinstance(result, dict) or result.get("written") is not True:
-        return None, f"exportScore did not write a file: {reply}"
-    try:
-        return parse_snapshot(path), None
-    finally:
-        path.unlink(missing_ok=True)
 
 
 def _staff_indices(snapshot: Snapshot, staff: int | None) -> list[int] | str:
@@ -108,7 +81,7 @@ async def read_passage(
         return to_json({"error": "end_measure must be >= start_measure."})
 
     if isinstance(bridge, MuseScoreBridge):
-        snapshot, export_error = await _export_snapshot(bridge)
+        snapshot, export_error = await export_snapshot(bridge)
         if snapshot is None:
             return to_json({"error": export_error})
         if end_measure > snapshot["measure_count"]:
@@ -187,7 +160,7 @@ async def get_measure_content(measure: int, staff: int = 0) -> str:
         return error
 
     if isinstance(bridge, MuseScoreBridge):
-        snapshot, export_error = await _export_snapshot(bridge)
+        snapshot, export_error = await export_snapshot(bridge)
         if snapshot is None:
             return to_json({"error": export_error})
         if measure > snapshot["measure_count"]:
@@ -285,7 +258,7 @@ async def export_live_score(path: str | None = None, format: str = "musicxml") -
         )
 
     if path is None:
-        target = _export_dir() / f"score-{uuid.uuid4().hex}.{format}"
+        target = export_dir() / f"score-{uuid.uuid4().hex}.{format}"
     else:
         target = Path(path)
         if not target.is_absolute():
@@ -295,9 +268,113 @@ async def export_live_score(path: str | None = None, format: str = "musicxml") -
     if "error" in reply:
         error = str(reply["error"])
         if "Unknown command" in error:
-            return to_json({"error": _PLUGIN_OUTDATED_ERROR})
+            return to_json({"error": PLUGIN_OUTDATED_ERROR})
         return to_json({"error": error})
     result = reply.get("result")
     if not isinstance(result, dict) or result.get("written") is not True:
         return to_json({"error": f"exportScore did not write a file: {reply}"})
     return to_json({"success": True, "path": target.as_posix(), "format": format})
+
+
+@mcp.tool()
+async def realize_harmony(figure: str, key: str, octave: int = 4) -> str:
+    """Turn a harmonic intention into concrete, correctly spelled pitches.
+
+    Resolves a roman numeral in a key, or an absolute chord symbol, into
+    the notes that spell it — ready to hand straight to ``add_live_notes``
+    as a ``chord`` entry. This is the "I want the dominant of the
+    dominant" to "these four notes" step, with music21 choosing the
+    spelling (a German sixth comes back with a D-sharp, not an E-flat).
+
+    Pure theory: no score and no MuseScore connection needed.
+
+    Args:
+        figure: A roman numeral read in *key* (``"V7"``, ``"V7/V"``,
+            ``"bVII"``, ``"ii65"``, ``"Ger65"``, ``"cad64"``) or a chord
+            symbol (``"E-maj7"``, ``"F#m7b5"``). Use ``-`` for a flat
+            root (``"B-7"`` is B-flat dominant 7; ``"Bb7"`` would be read
+            as B with a flat-7).
+        key: Key to read the figure in. Uppercase is major, lowercase is
+            minor (``"E-"`` = E-flat major, ``"c"`` = C minor).
+        octave: Octave for the lowest note (default 4, middle C).
+    """
+    try:
+        pitches = theory.realize(figure, key, octave)
+    except ValueError as exception:
+        return to_json({"error": str(exception)})
+    except Exception as exception:  # noqa: BLE001 - music21 raises broadly
+        return to_json({"error": f"could not realize {figure!r} in {key}: {exception}"})
+
+    return to_json(
+        {
+            "success": True,
+            "figure": figure,
+            "key": key,
+            "pitches": pitches,
+            "chord_for_add_live_notes": [p["name"] for p in pitches],
+        }
+    )
+
+
+@mcp.tool()
+async def analyze_passage(
+    start_measure: int,
+    end_measure: int,
+    staff: int | None = None,
+    key: str | None = None,
+) -> str:
+    """Report what a passage of the live score is doing, musically.
+
+    Advisory only — this reads the score and describes it, and never
+    edits or blocks anything. Observations are offered for judgement, not
+    as rules: parallel fifths are an error in a chorale, the point in
+    organum, and unremarkable in power chords, so the tool reports them
+    and leaves the call to you.
+
+    Reports:
+
+    - the key music21 detects for the passage (and how it compares to
+      *key*, if you supply the one you intend),
+    - a roman-numeral reading of each measure's harmony,
+    - voice-leading observations between consecutive chords: parallel and
+      hidden fifths/octaves, and voice crossings, each located by measure,
+    - the ambitus (lowest to highest note) of each staff.
+
+    Args:
+        start_measure: First measure (1-indexed).
+        end_measure: Last measure (inclusive, 1-indexed).
+        staff: Staff to analyze (0-indexed). Omit to analyze all staves
+            together, which is what you want for harmony.
+        key: The key you intend, e.g. ``"E-"`` or ``"c"``. Optional; when
+            given, harmony is read in this key rather than the detected one.
+    """
+    bridge = connected_bridge()
+    if bridge is None:
+        return to_json({"error": NOT_CONNECTED})
+    if not isinstance(bridge, MuseScoreBridge):
+        return to_json(
+            {
+                "error": "analyze_passage is only supported with MuseScore "
+                "(it needs the MusicXML export that Dorico and Sibelius "
+                "do not provide over Remote Control)."
+            }
+        )
+    if error := check_measure(start_measure, "start_measure"):
+        return error
+    if end_measure < start_measure:
+        return to_json({"error": "end_measure must be >= start_measure."})
+
+    path = export_dir() / f"analyze-{uuid.uuid4().hex}.musicxml"
+    reply = await bridge.export_score(path.as_posix(), "musicxml")
+    if "error" in reply:
+        error = str(reply["error"])
+        if "Unknown command" in error:
+            return to_json({"error": PLUGIN_OUTDATED_ERROR})
+        return to_json({"error": error})
+    try:
+        report = theory.analyze_musicxml(path, start_measure, end_measure, staff, key)
+    except ValueError as exception:
+        return to_json({"error": str(exception)})
+    finally:
+        path.unlink(missing_ok=True)
+    return to_json(report)

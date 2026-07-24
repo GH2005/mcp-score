@@ -8,7 +8,9 @@ The MuseScore plugin runs inside MuseScore 4 and opens a WebSocket server on `lo
 
 The plugin is only needed for **manipulation** and **analysis** tools (reading passages, arranging, transposing, etc.). **Generation** tools work without it -- they produce MusicXML files that MuseScore can open directly.
 
-Plugin 0.2.0 adds `exportScore` (ground-truth score snapshots), a ranged `transpose`, and `apiProbe`, and gates the commands that crash or corrupt MuseScore Studio 4.7.4. See [agent-playbook.md](agent-playbook.md) for the **verified support matrix** and correct usage pattern of every command -- read it before driving the bridge.
+Plugin 0.3.0 widens the write vocabulary: `addNote` gained `addToChord` and `tpc` (explicit spelling), `goToStaff` gained `voice`, and `addRest` and `setPitches` are new. The wire `transpose` command was removed -- transposition now happens server-side with music21 and arrives as `setPitches` edits. See [agent-playbook.md](agent-playbook.md) for the **verified support matrix** and correct usage pattern of every command -- read it before driving the bridge.
+
+The plugin holds no music theory. It stores pitches and spellings that the Python server computes with music21; note names exist only server-side.
 
 ## Prerequisites
 
@@ -105,16 +107,25 @@ The plugin accepts JSON messages over WebSocket. Each message must have a `comma
 
 ### Navigation
 
-| Command       | Params           | Description                         |
-| ------------- | ---------------- | ----------------------------------- |
-| `goToMeasure` | `{measure: int}` | Move cursor to measure (1-indexed). |
-| `goToStaff`   | `{staff: int}`   | Move cursor to staff (0-indexed).   |
+| Command       | Params                      | Description                                                                            |
+| ------------- | --------------------------- | -------------------------------------------------------------------------------------- |
+| `goToMeasure` | `{measure: int}`            | Move cursor to measure (1-indexed).                                                    |
+| `goToStaff`   | `{staff: int, voice?: 0-3}` | Move cursor to staff (0-indexed) and optionally a voice. Both persist across commands. |
 
-### Writing notes
+### Writing notes and rests
 
-| Command   | Params                                          | Description                                                                                                                                  |
-| --------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `addNote` | `{pitch, duration?, advanceCursorAfterAction?}` | Add a note at cursor. Pitch is MIDI number (60 = middle C). Duration is `{numerator, denominator}` fraction, defaults to 1/4 (quarter note). |
+| Command   | Params                                                             | Description                                                                                                                                                                                |
+| --------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `addNote` | `{pitch, tpc?, addToChord?, duration?, advanceCursorAfterAction?}` | Add a note at cursor. Pitch is MIDI (60 = middle C); `tpc` is the spelling (-1..33) and should always be sent. `addToChord: true` stacks onto the previous note. Duration defaults to 1/4. |
+| `addRest` | `{duration?, advanceCursorAfterAction?}`                           | Add a rest at cursor.                                                                                                                                                                      |
+
+### Rewriting pitches
+
+| Command      | Params                                                    | Description                                                                                                                                                                                                               |
+| ------------ | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `setPitches` | `{staff, voice?, startMeasure, endMeasure, edits: [...]}` | Rewrite pitch and spelling over a range. Each edit is `{oldPitch, newPitch, newTpc}` and applies positionally (tick order, then ascending pitch within a chord). Every `oldPitch` is verified before anything is written. |
+
+`newTpc` is required alongside `newPitch`: MuseScore exports a note's spelling, not its MIDI number, so changing one without the other leaves a note that still exports as the old pitch.
 
 ### Score markings
 
@@ -134,13 +145,14 @@ The plugin accepts JSON messages over WebSocket. Each message must have a `comma
 | ---------------- | -------------- | ---------------------------------------------- |
 | `appendMeasures` | `{count: int}` | Append empty measures to the end of the score. |
 
-### Selection and transformation
+### Selection
 
-| Command                | Params                                                            | Description                                                                                                           |
-| ---------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `selectCurrentMeasure` | none                                                              | Select all elements in the measure at the cursor. (Unreliable in MuseScore 4: the selection stays empty.)             |
-| `selectCustomRange`    | `{startMeasure, endMeasure, startStaff, endStaff}`                | Select a range. Measures are 1-indexed (inclusive). Staves are 0-indexed (inclusive). (Unreliable in MuseScore 4.)    |
-| `transpose`            | `{semitones, startMeasure?, endMeasure?, startStaff?, endStaff?}` | Transpose by semitones (positive = up). **Use the ranged form**; the selection-based form cannot work in MuseScore 4. |
+| Command                | Params                                             | Description                                                                                                        |
+| ---------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `selectCurrentMeasure` | none                                               | Select all elements in the measure at the cursor. (Unreliable in MuseScore 4: the selection stays empty.)          |
+| `selectCustomRange`    | `{startMeasure, endMeasure, startStaff, endStaff}` | Select a range. Measures are 1-indexed (inclusive). Staves are 0-indexed (inclusive). (Unreliable in MuseScore 4.) |
+
+Nothing in the bridge depends on a selection. To transpose, use the `transpose_passage` MCP tool, which computes new pitches and spellings with music21 and applies them via `setPitches`.
 
 ### Undo
 
