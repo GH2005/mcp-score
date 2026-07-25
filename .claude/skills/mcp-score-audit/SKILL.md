@@ -12,8 +12,11 @@ description: >
   tool", or when resuming a test-and-fix campaign over the plugin or the
   server. Distinct from the musescore-bridge skill: that one records the
   current verified state, this one is the procedure that regenerates it.
+  A campaign is not finished when the code works: it is finished when the
+  musescore-bridge skill tells the model how AND when to use the feature,
+  because the user describes music and never names a skill or a tool.
 metadata:
-  version: "1.0"
+  version: "1.1"
 ---
 
 # mcp-score audit & repair
@@ -132,6 +135,10 @@ End-to-end path for a command:
    diff, so a dirty score cannot cause a false pass or failure).
 5. **Bump the plugin `version`** in the QML whenever the QML changes —
    that is what makes `pluginVersion` a usable staleness check.
+6. **Make it reachable** — a working, tested, undocumented-as-a-habit
+   feature is one nobody will ever invoke. Phase 5 step 2 is where this
+   is done and checked; do not treat the implementation as complete
+   before it.
 
 For a defect that is MuseScore's rather than ours, do not paper over it:
 guard the call, make the tool refuse with an explanation, and record the
@@ -145,25 +152,76 @@ documented state matches reality.
 1. Update the `musescore-bridge` skill's `agent-playbook.md`: move rows
    between the works/broken tables, add new surfaces, and update the
    banner's **verification date** and **plugin version**.
-2. Update the five safety rules in that skill's `SKILL.md` only if a
-   safety-relevant fact changed. Keep them a subset — the playbook stays
-   the single source of truth; do not let the two drift into rival lists.
-3. **Prove coverage** — every wire command and every MCP tool must appear
-   by name in the playbook. This is the check that would have caught the
-   2026-07-22 gap:
+
+2. **Make the feature reachable without anyone asking for it.** This is
+   the step most easily mistaken for done.
+
+   **The user never names the skill, and never asks for a feature by
+   name.** They describe music — _"add an inner voice through bar 12"_,
+   _"reharmonize the turnaround"_ — and expect the right tool to be
+   reached for. A capability that is documented but not reachable does
+   not exist in practice: the support matrix records that a surface
+   _exists_, which is a different claim from knowing _when to use it_.
+
+   So for every capability you added or changed, do all three. Treat them
+   as part of the change, not as follow-up work:
+
+   - **Trigger** — does `SKILL.md`'s `description` fire on the phrasings
+     a musician would actually type for this feature, naming no tool, no
+     file and no application? Add them. Write _"add an inner voice"_, not
+     _"call add_live_notes with voice=1"_.
+   - **Habit** — add a row to the habits table in `SKILL.md` saying at
+     _which moment_ to reach for it, and what it replaces. If you cannot
+     name the moment that should trigger it, the feature is not finished.
+   - **Limit** — record what it does **not** decide, so a later session
+     does not over-trust it (e.g. `realize_harmony` gives pitch content,
+     never a voicing).
+
+   > Example: `add_live_notes` gaining a `voice` argument is not finished
+   > when the matrix says "voice 0-3". It is finished when the description
+   > fires on _"give the left hand its own line"_ and the habits table
+   > says to use `voice=1` rather than stacking a chord into voice 0.
+
+3. Update the six safety rules in `SKILL.md` only if a safety-relevant
+   fact changed. Keep them a subset — the playbook stays the single
+   source of truth; do not let the two drift into rival lists. The same
+   applies to the habits table: it is the imperative short form of the
+   playbook's composing loop, not a second opinion.
+
+4. **Prove coverage** — mechanically, in two places. The playbook check is
+   what would have caught the 2026-07-22 gap; the `SKILL.md` check is what
+   catches a tool that is documented but unreachable, because `SKILL.md`
+   is what loads when the skill fires and the playbook is only read if
+   something already sent you there.
 
 ```bash
 PB=.claude/skills/musescore-bridge/agent-playbook.md
+SK=.claude/skills/musescore-bridge/SKILL.md
 Q=src/mcp_score/musescore/mcp-score-bridge.qml
+
+TOOLS=$(grep -h -A3 "@mcp.tool()" src/mcp_score/tools/*.py \
+  | sed -n 's/^\(async \)\{0,1\}def \([A-Za-z_]*\).*/\2/p' | sort -u)
+
+# Every wire command and every MCP tool is named in the playbook.
 { sed -n 's/.*case "\([A-Za-z]*\)":[[:space:]]*return handle.*/\1/p' $Q
-  grep -h -A3 "@mcp.tool()" src/mcp_score/tools/*.py \
-    | sed -n 's/^\(async \)\{0,1\}def \([A-Za-z_]*\).*/\2/p'
+  echo "$TOOLS"
 } | sort -u | while read -r n; do
   grep -q "\b$n\b" "$PB" || echo "MISSING FROM PLAYBOOK: $n"
 done
+
+# Every MCP tool is also named in SKILL.md, which is the part the model
+# actually sees when the skill triggers.
+echo "$TOOLS" | while read -r n; do
+  grep -q "\b$n\b" "$SK" || echo "UNREACHABLE (not in SKILL.md): $n"
+done
 ```
 
-4. Format and test:
+Both scripts passing still only proves the names are present. Read the
+description back and ask honestly: _if the user said nothing but a
+musical instruction, would this fire, and would I know which tool to
+reach for?_ If not, the campaign is not finished.
+
+5. Format and test:
 
 ```bash
 uv run --with "nodejs-bin[cmd]" python -m nodejs.npx --yes prettier@3 --write <changed .md files>

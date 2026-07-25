@@ -130,13 +130,18 @@ verified. The MuseScore-only tools refuse when another app is connected
 
 ## Composing on an open score
 
-The loop for live work with a musician, using the tools above:
+The loop for live work with a musician. Run it by default — the user
+describes music, not tools, and should never have to ask you to read
+before writing or to spell a note properly. (The skill's habits table is
+this loop in short imperative form; this is the reasoning behind it.)
 
 1. **Read what is there** — `read_passage`. It reports chords, voices and
    spelling accurately, so never guess at the current state.
 2. **Decide the music yourself.** music21 supplies theory mechanics, not
    taste: it will not tell you what the piece needs. `realize_harmony`
-   turns a decision you have already made into notes.
+   turns a decision you have already made into notes — and it gives pitch
+   content only. Voicing, spacing, doubling, register and which line moves
+   where are yours; nothing in the stack decides them.
 3. **Write it spelled** — `add_live_notes` with `name`/`chord` entries.
    Prefer names over bare MIDI: a bare pitch makes MuseScore guess, and
    an ascending C-sharp and a descending D-flat are the same MIDI number
