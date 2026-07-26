@@ -6,6 +6,7 @@ from mcp_score import theory
 from mcp_score.app import mcp
 from mcp_score.bridge import ScoreBridge
 from mcp_score.bridge.musescore import MuseScoreBridge
+from mcp_score.musicxml import get_measure
 from mcp_score.theory import plan_transposition
 from mcp_score.tools import (
     NOT_CONNECTED,
@@ -184,17 +185,32 @@ async def transpose_passage(
     start_measure: int,
     end_measure: int,
     staff: int,
-    semitones: int,
+    semitones: int | None = None,
     voice: int | None = None,
+    degrees: int | None = None,
+    key: str | None = None,
 ) -> str:
     """Transpose a passage in the live score, spelling it musically.
 
-    Each note's new spelling is chosen by music21 rather than by a fixed
-    per-semitone table, so a passage transposed into a flat key comes out
-    with flats. The passage is read from a MusicXML snapshot first, the
-    new pitches are computed here, and the plugin verifies every note
-    still matches before it writes anything — a passage that changed since
-    the read fails whole rather than half-transposed.
+    Two ways to move the music, and they answer different requests:
+
+    - ``semitones`` moves it *chromatically*, by a fixed distance. This
+      is "put it in another key" — up a minor third is up a minor third
+      from every note.
+    - ``degrees`` (with ``key``) moves it *within the key*, by scale
+      steps: +1 up a second, +2 up a third, -4 down a fifth. This is
+      what "move that up a third" means when the music is to stay in its
+      key — the interval changes size from degree to degree so it does.
+      Notes foreign to the key are pulled onto the nearest scale tone in
+      the direction of travel and reported back in ``snapped``.
+
+    Pass exactly one of them. Each note's spelling is chosen by music21
+    rather than by a fixed per-semitone table, so a passage moved into a
+    flat key comes out with flats. The passage is read from a MusicXML
+    snapshot first, the new pitches are computed here, and the plugin
+    verifies every note still matches before it writes anything — a
+    passage that changed since the read fails whole rather than
+    half-transposed.
 
     Args:
         start_measure: First measure (1-indexed).
@@ -203,6 +219,9 @@ async def transpose_passage(
         semitones: Semitones to transpose (positive = up, negative = down).
         voice: Voice to transpose (0-3). Omit to transpose every voice on
             the staff.
+        degrees: Scale steps to move within ``key`` (+2 = up a third).
+        key: The key to stay inside (``"E-"`` major, ``"c"`` minor).
+            Required with ``degrees``.
     """
     bridge = connected_bridge()
     if bridge is None:
@@ -223,6 +242,18 @@ async def transpose_passage(
         return to_json({"error": "end_measure must be >= start_measure."})
     if voice is not None and not 0 <= voice <= 3:
         return to_json({"error": "voice must be 0-3."})
+    if (semitones is None) == (degrees is None):
+        return to_json(
+            {
+                "error": "pass exactly one of semitones (chromatic) or degrees "
+                "(within a key, needs key=). 'Up a third in E-flat' is "
+                "degrees=2, key='E-'."
+            }
+        )
+    if degrees is not None and not key:
+        return to_json(
+            {"error": "degrees needs key= — the scale it should stay inside."}
+        )
 
     snapshot, export_error = await export_snapshot(bridge)
     if snapshot is None:
@@ -235,11 +266,23 @@ async def transpose_passage(
             }
         )
 
-    plans = plan_transposition(
-        snapshot, staff, start_measure, end_measure, semitones, voice
-    )
-    if isinstance(plans, str):
-        return to_json({"error": plans})
+    snapped: list[dict[str, Any]] = []
+    if degrees is not None:
+        assert key is not None
+        diatonic = theory.plan_diatonic_transposition(
+            snapshot, staff, start_measure, end_measure, degrees, key, voice
+        )
+        if isinstance(diatonic, str):
+            return to_json({"error": diatonic})
+        plans = diatonic["plans"]
+        snapped = diatonic["snapped"]
+    else:
+        assert semitones is not None
+        plans = plan_transposition(
+            snapshot, staff, start_measure, end_measure, semitones, voice
+        )
+        if isinstance(plans, str):
+            return to_json({"error": plans})
     if not plans:
         return to_json(
             {
@@ -249,19 +292,58 @@ async def transpose_passage(
             }
         )
 
+    applied, failure = await _apply_pitch_plans(
+        bridge, staff, start_measure, end_measure, plans
+    )
+    if failure is not None:
+        return to_json(failure)
+
+    response: dict[str, Any] = {
+        "success": True,
+        "start_measure": start_measure,
+        "end_measure": end_measure,
+        "staff": staff,
+        "notes_transposed": sum(v["notes"] for v in applied),
+        "voices": applied,
+    }
+    if degrees is not None:
+        response["degrees"] = degrees
+        response["key"] = key
+        response["snapped"] = snapped
+        if snapped:
+            response["note"] = (
+                f"{len(snapped)} note(s) were foreign to {key} and were pulled "
+                "onto the nearest scale tone."
+            )
+    else:
+        response["semitones"] = semitones
+    return to_json(response)
+
+
+async def _apply_pitch_plans(
+    bridge: MuseScoreBridge,
+    staff: int,
+    start_measure: int,
+    end_measure: int,
+    plans: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Send one ``setPitches`` call per voice, stopping at the first error.
+
+    Returns the per-voice results and, when a voice failed, the error
+    payload to return — which names the voices already applied, because
+    the plugin's undo cannot take them back.
+    """
     applied: list[dict[str, Any]] = []
     for plan in plans:
         reply = await bridge.set_pitches(
             staff, plan["voice"], start_measure, end_measure, plan["edits"]
         )
         if "error" in reply:
-            return to_json(
-                {
-                    "error": reply["error"],
-                    "voice": plan["voice"],
-                    "applied_voices": applied,
-                }
-            )
+            return applied, {
+                "error": reply["error"],
+                "voice": plan["voice"],
+                "applied_voices": applied,
+            }
         result = reply.get("result", {})
         applied.append(
             {
@@ -269,18 +351,291 @@ async def transpose_passage(
                 "notes": result.get("notesChanged", len(plan["edits"])),
             }
         )
+    return applied, None
 
+
+@mcp.tool()
+async def transform_passage(
+    operation: str,
+    start_measure: int,
+    end_measure: int,
+    staff: int,
+    key: str | None = None,
+    axis: str | None = None,
+    voice: int | None = None,
+    copies: int = 1,
+    degrees: int = 0,
+) -> str:
+    """Apply a classical melodic transformation to a passage (MuseScore only).
+
+    Operations:
+
+    - ``"invert"`` — mirror the line around ``axis``, diatonically in
+      ``key``: what went up a third now goes down a third. Only pitches
+      change, so the rhythm and the barlines are untouched, and every
+      voice on the staff can be inverted at once.
+    - ``"retrograde"`` — write the passage backwards, pitches *and*
+      rhythm. This REPLACES the passage by writing it again note by
+      note, in one voice.
+    - ``"sequence"`` — repeat the passage ``copies`` times into the
+      measures that follow, each copy ``degrees`` scale steps higher
+      (or lower) than the last. This WRITES OVER those measures.
+
+    Retrograde and sequence have to re-enter the music note by note,
+    which the wire cannot do for everything MuseScore can hold: a
+    passage containing ties, tuplets, grace notes, a meter change, or a
+    voice that does not fill every bar is refused with the reason rather
+    than written wrong. Nothing is sent to the score unless the whole
+    transformation was planned successfully.
+
+    Args:
+        operation: ``"invert"``, ``"retrograde"``, or ``"sequence"``.
+        start_measure: First measure of the source passage (1-indexed).
+        end_measure: Last measure of the source passage (inclusive).
+        staff: Staff index (0-indexed).
+        key: Key to stay inside. Required for invert and sequence.
+        axis: The mirror note for invert, octave required (``"G4"``).
+        voice: Voice (0-3). For invert, omit to invert every voice;
+            retrograde and sequence rewrite one voice, default 0.
+        copies: How many sequenced copies to write (sequence only).
+        degrees: Scale steps each copy sits above the previous one
+            (sequence only; +1 = a second, 0 = repeat verbatim).
+    """
+    bridge = connected_bridge()
+    if bridge is None:
+        return to_json({"error": NOT_CONNECTED})
+    if error := _require_musescore(bridge, "transform_passage"):
+        return error
+    if operation not in {"invert", "retrograde", "sequence"}:
+        return to_json(
+            {
+                "error": f"unknown operation: {operation!r}. Choose from: "
+                "invert, retrograde, sequence."
+            }
+        )
+    if error := check_measure(start_measure, "start_measure"):
+        return error
+    if end_measure < start_measure:
+        return to_json({"error": "end_measure must be >= start_measure."})
+    if staff < 0:
+        return to_json({"error": "staff must be >= 0."})
+    if voice is not None and not 0 <= voice <= 3:
+        return to_json({"error": "voice must be 0-3."})
+    if operation in {"invert", "sequence"} and not key:
+        return to_json(
+            {"error": f"{operation} needs key= — the scale it should stay inside."}
+        )
+    if operation == "invert" and not axis:
+        return to_json(
+            {
+                "error": "invert needs axis= — the note to mirror around, with "
+                "an octave (e.g. 'G4')."
+            }
+        )
+    assert isinstance(bridge, MuseScoreBridge)
+
+    snapshot, export_error = await export_snapshot(bridge)
+    if snapshot is None:
+        return to_json({"error": export_error})
+    if end_measure > snapshot["measure_count"]:
+        return to_json(
+            {
+                "error": f"end_measure {end_measure} out of range "
+                f"(score has {snapshot['measure_count']} measures)."
+            }
+        )
+
+    if operation == "invert":
+        assert key is not None and axis is not None
+        return await _invert_passage(
+            bridge, snapshot, staff, start_measure, end_measure, axis, key, voice
+        )
+    target_voice = 0 if voice is None else voice
+    if operation == "retrograde":
+        return await _retrograde_passage(
+            bridge, snapshot, staff, start_measure, end_measure, target_voice
+        )
+    assert key is not None
+    return await _sequence_passage(
+        bridge,
+        snapshot,
+        staff,
+        start_measure,
+        end_measure,
+        copies,
+        degrees,
+        key,
+        target_voice,
+    )
+
+
+async def _invert_passage(
+    bridge: MuseScoreBridge,
+    snapshot: dict[str, Any],
+    staff: int,
+    start_measure: int,
+    end_measure: int,
+    axis: str,
+    key: str,
+    voice: int | None,
+) -> str:
+    """Mirror a passage around an axis, re-pitching notes in place."""
+    planned = theory.plan_inversion(
+        snapshot, staff, start_measure, end_measure, axis, key, voice
+    )
+    if isinstance(planned, str):
+        return to_json({"error": planned})
+    plans = planned["plans"]
+    if not plans:
+        return to_json(
+            {"success": True, "notes_changed": 0, "detail": "No notes in that range."}
+        )
+
+    applied, failure = await _apply_pitch_plans(
+        bridge, staff, start_measure, end_measure, plans
+    )
+    if failure is not None:
+        return to_json(failure)
+
+    response: dict[str, Any] = {
+        "success": True,
+        "operation": "invert",
+        "start_measure": start_measure,
+        "end_measure": end_measure,
+        "staff": staff,
+        "axis": axis,
+        "key": key,
+        "notes_changed": sum(v["notes"] for v in applied),
+        "voices": applied,
+        "snapped": planned["snapped"],
+    }
+    if planned["snapped"]:
+        response["note"] = (
+            f"{len(planned['snapped'])} note(s) were chromatic; their reflected "
+            f"letters took {key}'s accidentals."
+        )
+    return to_json(response)
+
+
+async def _retrograde_passage(
+    bridge: MuseScoreBridge,
+    snapshot: dict[str, Any],
+    staff: int,
+    start_measure: int,
+    end_measure: int,
+    voice: int,
+) -> str:
+    """Rewrite a passage backwards, pitches and rhythm together."""
+    planned = theory.plan_retrograde(snapshot, staff, start_measure, end_measure, voice)
+    if isinstance(planned, str):
+        return to_json({"error": planned})
+
+    steps = _entries_to_steps(start_measure, staff, voice, planned["entries"])
+    if isinstance(steps, str):
+        return to_json({"error": steps})
+
+    result = await bridge.process_sequence(steps)
+    if "error" in result:
+        return to_json(result)
     return to_json(
         {
             "success": True,
+            "operation": "retrograde",
             "start_measure": start_measure,
             "end_measure": end_measure,
             "staff": staff,
-            "semitones": semitones,
-            "notes_transposed": sum(v["notes"] for v in applied),
-            "voices": applied,
+            "voice": voice,
+            "events_written": len(planned["entries"]),
+            "note": (
+                f"measures {start_measure}-{end_measure} of staff {staff} "
+                f"voice {voice} were rewritten. Read the passage back to "
+                "confirm what landed."
+            ),
         }
     )
+
+
+async def _sequence_passage(
+    bridge: MuseScoreBridge,
+    snapshot: dict[str, Any],
+    staff: int,
+    start_measure: int,
+    end_measure: int,
+    copies: int,
+    degrees: int,
+    key: str,
+    voice: int,
+) -> str:
+    """Repeat a motif into the following measures, shifted each time."""
+    planned = theory.plan_sequence(
+        snapshot, staff, start_measure, end_measure, copies, degrees, key, voice
+    )
+    if isinstance(planned, str):
+        return to_json({"error": planned})
+
+    steps: list[dict[str, Any]] = []
+    for copy in planned["copies"]:
+        compiled = _entries_to_steps(copy["measure"], staff, voice, copy["entries"])
+        if isinstance(compiled, str):
+            return to_json({"error": compiled})
+        steps.extend(compiled)
+
+    overwritten = _measures_with_notes(
+        snapshot, staff, voice, end_measure + 1, planned["destination_end"]
+    )
+
+    result = await bridge.process_sequence(steps)
+    if "error" in result:
+        return to_json(result)
+    return to_json(
+        {
+            "success": True,
+            "operation": "sequence",
+            "start_measure": start_measure,
+            "end_measure": end_measure,
+            "staff": staff,
+            "voice": voice,
+            "key": key,
+            "destination_end": planned["destination_end"],
+            "copies": [
+                {"measure": copy["measure"], "shift_degrees": copy["shift_degrees"]}
+                for copy in planned["copies"]
+            ],
+            "snapped": [item for copy in planned["copies"] for item in copy["snapped"]],
+            "overwrote_existing_notes": overwritten,
+            "note": (
+                f"measures {end_measure + 1}-{planned['destination_end']} of "
+                f"staff {staff} voice {voice} now hold the copies"
+                + (
+                    f"; they already held notes ({', '.join(map(str, overwritten))}), "
+                    "which were replaced."
+                    if overwritten
+                    else "."
+                )
+            ),
+        }
+    )
+
+
+def _measures_with_notes(
+    snapshot: dict[str, Any],
+    staff: int,
+    voice: int,
+    first_measure: int,
+    last_measure: int,
+) -> list[int]:
+    """Which measures in a range already carry notes in a voice."""
+    occupied: list[int] = []
+    for measure in range(first_measure, last_measure + 1):
+        content = get_measure(snapshot, staff, measure)
+        if not content:
+            continue
+        if any(
+            event.get("kind") != "rest" and theory.musescore_voice(event) == voice
+            for event in content["events"]
+        ):
+            occupied.append(measure)
+    return occupied
 
 
 @mcp.tool()
@@ -395,6 +750,18 @@ async def add_live_notes(
         return to_json({"error": "notes must be a non-empty list."})
     assert isinstance(bridge, MuseScoreBridge)
 
+    steps = _entries_to_steps(measure, staff, voice, notes)
+    if isinstance(steps, str):
+        return to_json({"error": steps})
+
+    result = await bridge.process_sequence(steps)
+    return to_json(result)
+
+
+def _entries_to_steps(
+    measure: int, staff: int, voice: int, notes: list[dict[str, Any]]
+) -> list[dict[str, Any]] | str:
+    """Compile note entries into a positioned run of plugin steps."""
     steps: list[dict[str, Any]] = [
         {"action": "goToStaff", "params": {"staff": staff, "voice": voice}},
         {"action": "goToMeasure", "params": {"measure": measure}},
@@ -402,11 +769,9 @@ async def add_live_notes(
     for index, entry in enumerate(notes):
         compiled = _compile_entry(entry, index)
         if isinstance(compiled, str):
-            return to_json({"error": compiled})
+            return compiled
         steps.extend(compiled)
-
-    result = await bridge.process_sequence(steps)
-    return to_json(result)
+    return steps
 
 
 def _compile_entry(entry: dict[str, Any], index: int) -> list[dict[str, Any]] | str:

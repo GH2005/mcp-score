@@ -73,6 +73,11 @@ def _events(measure: stream.Measure) -> list[dict[str, Any]]:
         voice_id = voice_ids.get(id(el))
         if voice_id is not None:
             entry["voice"] = voice_id
+        # A tie means this event is only part of a note. Anything that
+        # re-enters the passage note by note has to refuse rather than
+        # re-attack the far side of the tie as a fresh onset.
+        if el.tie is not None:
+            entry["tie"] = el.tie.type
         if isinstance(el, chord.Chord):
             entry["kind"] = "chord" if len(el.pitches) > 1 else "note"
             entry["midi"] = sorted(p.midi for p in el.pitches)

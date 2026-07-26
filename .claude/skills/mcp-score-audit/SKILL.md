@@ -71,8 +71,8 @@ comm -23 <(sed -n 's/.*case "\([A-Za-z]*\)":[[:space:]]*return handle.*/\1/p' $Q
 ```
 
 Record the three lists as the campaign checklist before touching anything.
-Counts at last audit (2026-07-24, plugin 0.3.0): 23 wire commands, 15
-sequence actions, 25 MCP tools. Treat those as a staleness signal, not as
+Counts at last audit (2026-07-25, plugin 0.3.0): 23 wire commands, 15
+sequence actions, 28 MCP tools. Treat those as a staleness signal, not as
 the answer — re-derive them.
 
 **Musical logic belongs in Python, not QML.** The plugin is deliberately

@@ -1382,3 +1382,438 @@ class TestAnalyzePassage:
             result = json.loads(await analyze_passage(1, 2))
 
         assert result["error"] == NOT_CONNECTED
+
+
+# ── Write intelligence: voicing, diatonic motion, transformations ────
+
+
+def _write_tiling_musicxml(path: str) -> dict[str, object]:
+    """A 3-measure 4/4 score whose voice 0 fills every bar.
+
+    Measure 1 is C4 D4 quarters plus a G4 half, measure 2 a whole-note
+    E4, measure 3 a whole rest — a passage the re-entry path will accept.
+    """
+    from music21 import meter, note, stream
+
+    part = stream.Part()
+    first = stream.Measure(number=1)
+    first.append(meter.TimeSignature("4/4"))
+    first.append(note.Note("C4", quarterLength=1.0))
+    first.append(note.Note("D4", quarterLength=1.0))
+    first.append(note.Note("G4", quarterLength=2.0))
+    second = stream.Measure(number=2)
+    second.append(note.Note("E4", quarterLength=4.0))
+    third = stream.Measure(number=3)
+    third.append(note.Rest(quarterLength=4.0))
+    part.append(first)
+    part.append(second)
+    part.append(third)
+    score = stream.Score()
+    score.append(part)
+    score.write("musicxml", fp=path)
+    return {"result": {"written": True, "path": path, "format": "musicxml"}}
+
+
+def _bridge_with_tiling_export() -> AsyncMock:
+    """A MuseScore mock exporting the 3-measure tiling fixture."""
+    mock_bridge = AsyncMock(spec=MuseScoreBridge)
+    mock_bridge.is_connected = True
+    mock_bridge.export_score = AsyncMock(
+        side_effect=lambda path, fmt="musicxml": _write_tiling_musicxml(path)
+    )
+    mock_bridge.set_pitches = AsyncMock(return_value={"result": {"notesChanged": 1}})
+    mock_bridge.process_sequence = AsyncMock(return_value={"result": {"ok": True}})
+    return mock_bridge
+
+
+class TestVoiceProgressionTool:
+    """voice_progression: figures in, independent parts out."""
+
+    @pytest.mark.anyio()
+    async def test_needs_no_connection(self) -> None:
+        from mcp_score.tools.composition import voice_progression
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=None):
+            result = json.loads(await voice_progression(["I", "V", "I"], "C"))
+
+        assert result["success"] is True
+
+    @pytest.mark.anyio()
+    async def test_entries_are_ready_for_add_live_notes(self) -> None:
+        from mcp_score.tools.composition import voice_progression
+
+        result = json.loads(await voice_progression(["I", "IV", "V7", "I"], "C"))
+
+        entries = result["entries"]
+        assert len(entries["chords"]) == 4
+        assert len(entries["upper"]) == 4
+        assert len(entries["bass"]) == 4
+        # The whole texture is the bass plus the parts above it.
+        for whole, bass, upper in zip(
+            entries["chords"], entries["bass"], entries["upper"], strict=True
+        ):
+            assert whole["chord"][0] == bass["name"]
+            assert whole["chord"][1:] == upper["chord"]
+
+    @pytest.mark.anyio()
+    async def test_durations_are_applied_to_every_shape(self) -> None:
+        from mcp_score.tools.composition import voice_progression
+
+        result = json.loads(
+            await voice_progression(
+                ["I", "V"], "C", durations=[{"numerator": 1, "denominator": 2}] * 2
+            )
+        )
+
+        for shape in result["entries"].values():
+            assert all(e["denominator"] == 2 for e in shape)
+
+    @pytest.mark.anyio()
+    async def test_zero_solutions_reports_what_would_unblock_it(self) -> None:
+        from mcp_score.tools.composition import voice_progression
+
+        with patch(
+            "mcp_score.theory.plan_progression_voicing",
+            return_value={
+                "solution_count": 0,
+                "chords": [],
+                "relaxations_that_help": ["forbidVoiceOverlap"],
+            },
+        ):
+            result = json.loads(await voice_progression(["I", "V"], "C"))
+
+        assert result["solution_count"] == 0
+        assert result["relaxations_that_help"] == ["forbidVoiceOverlap"]
+        assert "forbidVoiceOverlap" in result["hint"]
+
+    @pytest.mark.anyio()
+    async def test_zero_solutions_with_no_single_fix_says_so(self) -> None:
+        from mcp_score.tools.composition import voice_progression
+
+        with patch(
+            "mcp_score.theory.plan_progression_voicing",
+            return_value={
+                "solution_count": 0,
+                "chords": [],
+                "relaxations_that_help": [],
+            },
+        ):
+            result = json.loads(await voice_progression(["I", "V"], "C"))
+
+        assert "no single rule" in result["hint"]
+
+    @pytest.mark.anyio()
+    @pytest.mark.parametrize(
+        ("figures", "kwargs"),
+        [
+            ([], {}),
+            (["I"] * 17, {}),
+            (["I"], {"num_parts": 5}),
+            (["I"], {"relax": ["forbidBadTaste"]}),
+            (["I"], {"durations": [{"numerator": 1, "denominator": 4}] * 2}),
+            (["I"], {"durations": [{"numerator": 0, "denominator": 4}]}),
+            (["  "], {}),
+        ],
+    )
+    async def test_validation(
+        self, figures: list[str], kwargs: dict[str, object]
+    ) -> None:
+        from mcp_score.tools.composition import voice_progression
+
+        result = json.loads(await voice_progression(figures, "C", **kwargs))
+
+        assert "error" in result
+
+    @pytest.mark.anyio()
+    async def test_writes_nothing_to_stdout(
+        self, capsys: pytest.CaptureFixture
+    ) -> None:
+        """The solver logs warnings; stdout is the MCP transport."""
+        from mcp_score.tools.composition import voice_progression
+
+        await voice_progression(["I", "IV", "V7", "I"], "C")
+
+        assert capsys.readouterr().out == ""
+
+
+class TestRealizeOrnamentTool:
+    """realize_ornament: the symbol as writable notes."""
+
+    @pytest.mark.anyio()
+    async def test_entries_ready_for_add_live_notes(self) -> None:
+        from mcp_score.tools.composition import realize_ornament
+
+        result = json.loads(await realize_ornament("turn", "C5", "C"))
+
+        assert result["success"] is True
+        assert [e["name"] for e in result["entries_for_add_live_notes"]] == [
+            "D5",
+            "C5",
+            "B4",
+            "C5",
+        ]
+
+    @pytest.mark.anyio()
+    async def test_needs_no_connection(self) -> None:
+        from mcp_score.tools.composition import realize_ornament
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=None):
+            result = json.loads(await realize_ornament("trill", "C5", "C"))
+
+        assert result["success"] is True
+
+    @pytest.mark.anyio()
+    async def test_unknown_ornament_errors(self) -> None:
+        from mcp_score.tools.composition import realize_ornament
+
+        result = json.loads(await realize_ornament("wobble", "C5", "C"))
+
+        assert "error" in result
+
+
+class TestTransposePassageDiatonic:
+    """transpose_passage: chromatic distance or scale steps, not both."""
+
+    @pytest.mark.anyio()
+    async def test_semitones_and_degrees_are_mutually_exclusive(self) -> None:
+        from mcp_score.tools.manipulation import transpose_passage
+
+        with patch(
+            "mcp_score.tools.get_active_bridge",
+            return_value=_musescore_bridge_with_fixture_export(),
+        ):
+            both = json.loads(
+                await transpose_passage(1, 1, 0, semitones=2, degrees=1, key="C")
+            )
+            neither = json.loads(await transpose_passage(1, 1, 0))
+
+        assert "exactly one" in both["error"]
+        assert "exactly one" in neither["error"]
+
+    @pytest.mark.anyio()
+    async def test_degrees_requires_a_key(self) -> None:
+        from mcp_score.tools.manipulation import transpose_passage
+
+        with patch(
+            "mcp_score.tools.get_active_bridge",
+            return_value=_musescore_bridge_with_fixture_export(),
+        ):
+            result = json.loads(await transpose_passage(1, 1, 0, degrees=2))
+
+        assert "key" in result["error"]
+
+    @pytest.mark.anyio()
+    async def test_diatonic_move_sends_in_key_spellings(self) -> None:
+        """C4 and E4 up a third in C are E4 and G4 — not E4 and G#4."""
+        from mcp_score.tools.manipulation import transpose_passage
+
+        mock_bridge = _musescore_bridge_with_fixture_export()
+        mock_bridge.set_pitches = AsyncMock(
+            return_value={"result": {"notesChanged": 2}}
+        )
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(await transpose_passage(1, 1, 0, degrees=2, key="C"))
+
+        assert result["success"] is True
+        assert result["degrees"] == 2
+        edits = mock_bridge.set_pitches.await_args.args[4]
+        assert [(e["oldPitch"], e["newPitch"]) for e in edits] == [(60, 64), (64, 67)]
+
+    @pytest.mark.anyio()
+    async def test_snapped_notes_are_surfaced(self) -> None:
+        from mcp_score.tools.manipulation import transpose_passage
+
+        mock_bridge = _musescore_bridge_with_fixture_export()
+        mock_bridge.set_pitches = AsyncMock(
+            return_value={"result": {"notesChanged": 2}}
+        )
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(await transpose_passage(1, 1, 0, degrees=1, key="E-"))
+
+        # C belongs to E-flat major; E natural does not, so only E4 snaps.
+        assert result["snapped"] == [{"measure": 1, "from": "E4", "to": "F4"}]
+        assert "foreign" in result["note"]
+
+    @pytest.mark.anyio()
+    async def test_chromatic_path_is_unchanged(self) -> None:
+        from mcp_score.tools.manipulation import transpose_passage
+
+        mock_bridge = _musescore_bridge_with_fixture_export()
+        mock_bridge.set_pitches = AsyncMock(
+            return_value={"result": {"notesChanged": 2}}
+        )
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(await transpose_passage(1, 1, 0, semitones=2))
+
+        assert result["semitones"] == 2
+        assert "degrees" not in result
+        assert "snapped" not in result
+
+
+class TestTransformPassage:
+    """transform_passage: invert, retrograde, sequence."""
+
+    @pytest.mark.anyio()
+    async def test_requires_a_connection(self) -> None:
+        from mcp_score.tools.manipulation import transform_passage
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=None):
+            result = json.loads(
+                await transform_passage("invert", 1, 1, 0, key="C", axis="G4")
+            )
+
+        assert result["error"] == NOT_CONNECTED
+
+    @pytest.mark.anyio()
+    async def test_rejects_a_non_musescore_bridge(self) -> None:
+        from mcp_score.tools.manipulation import transform_passage
+
+        other = AsyncMock()
+        other.is_connected = True
+        other.application_name = "Dorico"
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=other):
+            result = json.loads(
+                await transform_passage("invert", 1, 1, 0, key="C", axis="G4")
+            )
+
+        assert "only supported with MuseScore" in result["error"]
+
+    @pytest.mark.anyio()
+    @pytest.mark.parametrize(
+        ("operation", "kwargs", "expected"),
+        [
+            ("somersault", {}, "unknown operation"),
+            ("invert", {"key": "C"}, "axis"),
+            ("invert", {"axis": "G4"}, "key"),
+            ("sequence", {}, "key"),
+        ],
+    )
+    async def test_parameter_requirements(
+        self, operation: str, kwargs: dict[str, object], expected: str
+    ) -> None:
+        from mcp_score.tools.manipulation import transform_passage
+
+        mock_bridge = _bridge_with_tiling_export()
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(await transform_passage(operation, 1, 1, 0, **kwargs))
+
+        assert expected in result["error"]
+        mock_bridge.process_sequence.assert_not_awaited()
+
+    @pytest.mark.anyio()
+    async def test_invert_repitches_in_place(self) -> None:
+        from mcp_score.tools.manipulation import transform_passage
+
+        mock_bridge = _bridge_with_tiling_export()
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(
+                await transform_passage("invert", 1, 1, 0, key="C", axis="G4")
+            )
+
+        assert result["success"] is True
+        edits = mock_bridge.set_pitches.await_args.args[4]
+        # C4 D4 G4 mirrored around G4 become D5 C5 G4.
+        assert [e["newPitch"] for e in edits] == [74, 72, 67]
+        # Rhythm is untouched, so nothing is rewritten note by note.
+        mock_bridge.process_sequence.assert_not_awaited()
+
+    @pytest.mark.anyio()
+    async def test_retrograde_rewrites_the_passage_backwards(self) -> None:
+        from mcp_score.tools.manipulation import transform_passage
+
+        mock_bridge = _bridge_with_tiling_export()
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(await transform_passage("retrograde", 1, 1, 0))
+
+        assert result["success"] is True
+        steps = mock_bridge.process_sequence.await_args.args[0]
+        notes = [s for s in steps if s["action"] == "addNote"]
+        # G4 (half) first, then D4 and C4 quarters.
+        assert [n["params"]["pitch"] for n in notes] == [67, 62, 60]
+        assert notes[0]["params"]["duration"] == {"numerator": 1, "denominator": 2}
+
+    @pytest.mark.anyio()
+    async def test_retrograde_refuses_a_partial_voice(self) -> None:
+        from mcp_score.tools.manipulation import transform_passage
+
+        mock_bridge = _bridge_with_tiling_export()
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(await transform_passage("retrograde", 1, 1, 0, voice=2))
+
+        assert "voice 2" in result["error"]
+        mock_bridge.process_sequence.assert_not_awaited()
+
+    @pytest.mark.anyio()
+    async def test_sequence_positions_every_copy(self) -> None:
+        from mcp_score.tools.manipulation import transform_passage
+
+        mock_bridge = _bridge_with_tiling_export()
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(
+                await transform_passage(
+                    "sequence", 1, 1, 0, key="C", copies=2, degrees=1
+                )
+            )
+
+        assert result["destination_end"] == 3
+        assert [c["measure"] for c in result["copies"]] == [2, 3]
+        steps = mock_bridge.process_sequence.await_args.args[0]
+        gotos = [s["params"]["measure"] for s in steps if s["action"] == "goToMeasure"]
+        assert gotos == [2, 3]
+        # One batch, so the whole sequence is a single undo group.
+        assert mock_bridge.process_sequence.await_count == 1
+
+    @pytest.mark.anyio()
+    async def test_sequence_reports_measures_it_overwrote(self) -> None:
+        from mcp_score.tools.manipulation import transform_passage
+
+        mock_bridge = _bridge_with_tiling_export()
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(
+                await transform_passage(
+                    "sequence", 1, 1, 0, key="C", copies=2, degrees=1
+                )
+            )
+
+        # Measure 2 holds a whole note; measure 3 holds a rest.
+        assert result["overwrote_existing_notes"] == [2]
+        assert "replaced" in result["note"]
+
+    @pytest.mark.anyio()
+    async def test_sequence_refuses_beyond_the_end_and_writes_nothing(self) -> None:
+        from mcp_score.tools.manipulation import transform_passage
+
+        mock_bridge = _bridge_with_tiling_export()
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(
+                await transform_passage(
+                    "sequence", 1, 1, 0, key="C", copies=9, degrees=1
+                )
+            )
+
+        assert "append_live_measures" in result["error"]
+        mock_bridge.process_sequence.assert_not_awaited()
+
+    @pytest.mark.anyio()
+    async def test_end_measure_beyond_the_score_is_rejected(self) -> None:
+        from mcp_score.tools.manipulation import transform_passage
+
+        mock_bridge = _bridge_with_tiling_export()
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(
+                await transform_passage("invert", 1, 99, 0, key="C", axis="G4")
+            )
+
+        assert "out of range" in result["error"]
+        mock_bridge.set_pitches.assert_not_awaited()

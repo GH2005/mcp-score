@@ -286,6 +286,12 @@ async def realize_harmony(figure: str, key: str, octave: int = 4) -> str:
     dominant" to "these four notes" step, with music21 choosing the
     spelling (a German sixth comes back with a D-sharp, not an E-flat).
 
+    The reply also carries ``metadata``: the chord's root, bass,
+    inversion, quality, and — for a secondary function like ``V7/V`` —
+    the key it tonicizes. That is the part the pitches alone cannot tell
+    you. For a chord voiced into independent parts rather than a bare
+    stack of pitches, use ``voice_progression``.
+
     Pure theory: no score and no MuseScore connection needed.
 
     Args:
@@ -299,7 +305,7 @@ async def realize_harmony(figure: str, key: str, octave: int = 4) -> str:
         octave: Octave for the lowest note (default 4, middle C).
     """
     try:
-        pitches = theory.realize(figure, key, octave)
+        pitches, metadata = theory.realize_detailed(figure, key, octave)
     except ValueError as exception:
         return to_json({"error": str(exception)})
     except Exception as exception:  # noqa: BLE001 - music21 raises broadly
@@ -312,6 +318,7 @@ async def realize_harmony(figure: str, key: str, octave: int = 4) -> str:
             "key": key,
             "pitches": pitches,
             "chord_for_add_live_notes": [p["name"] for p in pitches],
+            "metadata": metadata,
         }
     )
 
