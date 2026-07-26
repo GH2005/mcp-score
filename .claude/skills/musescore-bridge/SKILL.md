@@ -112,7 +112,7 @@ repeating anything it says.
 The [playbook](agent-playbook.md) carries the reasoning and the full
 composing loop; this table is the short form.
 
-## The six rules that keep MuseScore alive
+## The seven rules that keep MuseScore alive
 
 The load-bearing safety rules — the ones that crash, corrupt, or silently
 mislead. They live here so they are in context even before you open the
@@ -145,3 +145,12 @@ playbook; the playbook carries the full detail and the reasoning.
    chorale, the point in organum, and ordinary in power chords. Weigh
    them against the style being written; never "fix" the user's music on
    the strength of a report, and never let it override their intent.
+7. **Never read notes off a picture, and never count positions by eye.**
+   On a blind test, reading pitches from a rendered score scored 40%
+   while parsing the same file scored 100% — and every error was
+   displaced upward by a step or two, so the result looked like music
+   and was wrong throughout. A render shows layout and density, nothing
+   more. The same trap applies to your own arithmetic: quote the named
+   value from a read (`"names": ["E-4"]`) rather than counting to "the
+   fourth event" down a listing. If a user offers a photograph of a
+   score, ask for the file instead.

@@ -55,6 +55,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - `getScore` parts report staff ranges again (derived from `startTrack`/`endTrack`; the MuseScore 3 staff properties are undefined in MuseScore 4)
 - `getCursorInfo` beat computation (via `measure.timesigActual`)
 - Docs: the MuseScore plugins directory is `~/Documents/MuseScore4/Plugins` on every OS (previously claimed `%APPDATA%` on Windows)
+- Docs: the playbook no longer suggests a rendered PNG as a general "visual check" of a snapshot. A blind test scored 40% on pitch read from a render (all fifteen errors displaced upward by one or two diatonic steps) against 100% for parsing the same file, so a render is now documented as answering layout and density only. Recorded as a gotcha, with the general rule it illustrates: trust a fact that is named (MusicXML, MIDI), never one recovered from position
 
 ### Security
 

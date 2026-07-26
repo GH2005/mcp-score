@@ -2,7 +2,7 @@
 
 > Reference — every claim here was verified against a live MuseScore
 > Studio 4.7.4 (Windows 11) by the committed live test suite
-> (`tests/live/`). Verification date: 2026-07-25. Plugin version: 0.3.0
+> (`tests/live/`). Verification date: 2026-07-26. Plugin version: 0.3.0
 > (unchanged — the write-intelligence campaign was Python-only and needed
 > no new wire commands).
 > When in doubt, re-run the suite; it is the source of truth.
@@ -48,13 +48,27 @@ file.
   (`mcp_score.musicxml.parse_snapshot` and `diff_snapshots` are the
   shared helpers behind both the tools and the live suite.)
 
+**Trust a fact that is _named_, never one you had to locate.** In
+MusicXML a pitch is stated outright (`<step>G</step><octave>4</octave>`),
+and in MIDI it is a number; there is no reference frame to get wrong. On
+an engraved page the same pitch is _positional_ — it has to be recovered
+by indexing a notehead against a staff grid, and one slip in that grid
+displaces every note after it. That single distinction is why the parse
+path is ground truth and a rendered image is not (measured below), and it
+applies to your own reading too: counting "the fourth event" by eye down
+a long `read_passage` listing is the positional operation again, in
+prose. Quote the named value instead. The code paths that must align by
+position are guarded — `setPitches` re-checks every `oldPitch` against
+what it finds and fails whole rather than half-applying — but nothing
+guards arithmetic you do in your head.
+
 ### Reading the score when you must bypass the tools
 
 Reach for this only when the tools above are not an option — the MCP
 server is disconnected but the plugin dock is still serving, you are
-debugging the bridge itself, or you need a rendered image (engraving and
-layout), not just note data. It is fully automated: never ask the user
-to save the file or to report what they see in MuseScore.
+debugging the bridge itself, or you want to see the engraving (layout,
+spacing, density) rather than the notes. It is fully automated: never ask
+the user to save the file or to report what they see in MuseScore.
 
 1. **Snapshot over the wire.** Send
    `{"command": "exportScore", "params": {"path": "C:/abs/path/out.musicxml", "format": "musicxml"}}`
@@ -66,8 +80,10 @@ to save the file or to report what they see in MuseScore.
    Use `format: "musicxml"`; `mscz` is rejected (see the broken-command
    table). The snapshot captures unsaved edits and works on a never-saved
    "Untitled" score without touching the user's file.
-2. **Read the snapshot.** Parse the MusicXML for note-exact data, and/or
-   render it with MuseScore's own CLI for a visual check:
+2. **Read the snapshot.** Parse the MusicXML for note-exact data. A
+   render answers a different, narrower question — how the music _sits on
+   the page_ — and must never be used to establish what the notes are
+   (see the accuracy measurement in the gotchas below):
    `MuseScore4.exe <snapshot>.musicxml -o <out>.png -r 130 --force`
    (exit code 0 on success). This works even while the MuseScore GUI is
    open (verified). It writes one PNG per page, suffixed `-1`, `-2`, …;
@@ -218,6 +234,22 @@ uv run --project <repo> pytest -m live tests/live -q
   uses 1–4 for the upper staff and 5–8 for the lower, while MuseScore
   numbers 0–3 within _each_ staff (`theory.musescore_voice` maps them).
   A measure with a single voice carries no voice marker at all.
+- **A rendered score image is unreliable for pitch — measured, not
+  assumed.** Blind test on 2026-07-26: a script generated a random
+  four-bar piano score, hid the answer, and rendered it at `-r 130`;
+  reading only the PNG (at three magnifications) scored **rhythm 25/25,
+  key and meter correct, pitch 10/25 — 40%**. `parse_snapshot` on the
+  same file scored 25/25. Worse than the rate: all fifteen errors were
+  displaced _upward_ by one or two diatonic steps, none downward — a
+  slipped staff grid, not noise, which yields plausible-looking music
+  that is wrong throughout. The notes read correctly were the visually
+  distinctive ones (above the staff, on ledger lines, carrying
+  accidentals); the ordinary in-staff notes, which are most of any real
+  score, were the misses. The test was also generous — every pitch was
+  diatonic in one key and the rhythms came from a short list. Use a
+  render for layout and density only; never transcribe from one, and
+  never ask the user for a photograph of a score in place of a file. For
+  image-to-notation, dedicated OMR (e.g. Audiveris) is the tool.
 - **music21's `Pitch.midi` folds an out-of-range pitch back inside
   0–127 by octaves**, so a note transposed off the top of the range comes
   back looking like a valid — but several octaves lower — note, and a
