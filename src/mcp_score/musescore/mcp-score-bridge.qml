@@ -15,7 +15,8 @@
 //   addRehearsalMark, setBarline, setKeySignature, setTimeSignature,
 //   setTempo, addChordSymbol, addDynamic, appendMeasures,
 //   selectCurrentMeasure, selectCustomRange, transpose, undo,
-//   processSequence, exportScore, newScore, apiProbe
+//   processSequence, exportScore, newScore, apiProbe,
+//   getClefs, setClef, removeClef
 //
 // setBarline, addChordSymbol, and addDynamic crash MuseScore Studio
 // 4.7.4 (newElement + cursor.add is fatal for those element types) and
@@ -32,7 +33,7 @@ MuseScore {
     id: root
     menuPath: "Plugins.MCP Score Bridge"
     description: "WebSocket bridge for mcp-score MCP server"
-    version: "0.3.0"
+    version: "0.4.5"
 
     // Keep the plugin running after onRun (required for persistent server).
     pluginType: "dock"
@@ -80,6 +81,28 @@ MuseScore {
         "mf": 80,    "f": 96,    "ff": 112,  "fff": 120, "ffff": 127,
         "fp": 96,    "sfz": 112, "sffz": 120, "sfp": 112, "rfz": 112,
         "fz": 112
+    })
+
+    // Clef name -> MuseScore ClefType enum value (libmscore/clef.h).
+    //
+    // These integers are NOT stable across MuseScore versions: C-clef
+    // variants between C5 and F have been added over time, which shifts
+    // every value from F onwards. Verified against MuseScore Studio 4.7.4
+    // by writing each clef and reading the exported MusicXML sign back
+    // (tests/live/test_clefs.py). An earlier table taken from the enum
+    // declaration had every value from F onwards one too high, which
+    // silently wrote the wrong clef -- do not "correct" these from source
+    // without re-running that test. Callers needing a variant not listed
+    // here pass an explicit `subtype` integer instead.
+    readonly property var clefTypes: ({
+        "treble":     0,   // G
+        "treble8vb":  2,   // G8_VB (tenor voice, guitar)
+        "treble8va":  3,   // G8_VA
+        "alto":       10,  // C3
+        "tenor":      11,  // C4
+        "bass":       20,  // F
+        "bass8vb":    22,  // F8_VB
+        "percussion": 29   // PERC
     })
 
     // ===================================================================
@@ -133,6 +156,9 @@ MuseScore {
                 case "setBarline":          return handleSetBarline(params);
                 case "setKeySignature":     return handleSetKeySignature(params);
                 case "setTimeSignature":    return handleSetTimeSignature(params);
+                case "getClefs":            return handleGetClefs(params);
+                case "setClef":             return handleSetClef(params);
+                case "removeClef":          return handleRemoveClef(params);
                 case "setTempo":            return handleSetTempo(params);
                 case "addChordSymbol":      return handleAddChordSymbol(params);
                 case "addDynamic":          return handleAddDynamic(params);
@@ -419,6 +445,178 @@ MuseScore {
         return measureNumber;
     }
 
+    /// Measure boundaries as [{ number, startTick, endTick }], computed in
+    /// one pass.
+    ///
+    /// measureNumberAtTick walks the score from the start on every call,
+    /// so using it inside a segment walk is quadratic. Clef enumeration
+    /// visits every segment in the score, hence this table.
+    function measureBoundaries() {
+        var bounds = [];
+        if (!curScore) return bounds;
+        var cursor = curScore.newCursor();
+        cursor.rewind(Cursor.SCORE_START);
+        var number = 1;
+        while (cursor.measure) {
+            var startTick = cursor.tick;
+            cursor.nextMeasure();
+            bounds.push({
+                number: number,
+                startTick: startTick,
+                endTick: cursor.measure ? cursor.tick : Infinity
+            });
+            number++;
+        }
+        return bounds;
+    }
+
+    /// The 1-indexed measure number holding a tick, using a prebuilt table.
+    function measureNumberFromBounds(bounds, tick) {
+        for (var i = 0; i < bounds.length; i++) {
+            if (tick >= bounds[i].startTick && tick < bounds[i].endTick) {
+                return bounds[i].number;
+            }
+        }
+        return bounds.length > 0 ? bounds[bounds.length - 1].number : 0;
+    }
+
+    /// Every clef in the score, in tick order.
+    ///
+    /// Walks raw segments rather than a Cursor: cursor.next() only stops
+    /// at ChordRest segments, so it steps straight over the Clef segments
+    /// this needs to find. Clefs live on the voice-0 track of their staff
+    /// (track = staffIdx * 4).
+    ///
+    /// Each entry carries `atMeasureStart`, which is what distinguishes a
+    /// normal staff-defining clef from the mid-measure clef changes
+    /// MuseScore's MIDI import inserts to chase stray notes.
+    /// Descriptors only -- safe to serialize into a JSON reply.
+    function collectClefs(staffFilter) {
+        var entries = collectClefEntries(staffFilter);
+        var infos = [];
+        for (var i = 0; i < entries.length; i++) infos.push(entries[i].info);
+        return infos;
+    }
+
+    /// As collectClefs, but each entry keeps the live Clef element under
+    /// `element` so removeClef can hand it to curScore.removeElement.
+    /// Never serialize these -- QML element objects are not JSON-safe.
+    function collectClefEntries(staffFilter) {
+        var clefs = [];
+        if (!curScore) return clefs;
+
+        // firstSegment is a function in MuseScore 4.7.4 and a property in
+        // some 3.x builds; next has the same ambiguity. Both shapes are
+        // accepted so the walk does not silently traverse nothing (a
+        // property read on a function object yields undefined, which is
+        // how 0.4.0 first reported a piano score as having zero clefs).
+        var segment = segmentValue(curScore.firstSegment, curScore);
+        if (!segment) return clefs;
+
+        var bounds = measureBoundaries();
+        var staffCount = curScore.nstaves;
+
+        while (segment) {
+            for (var staffIdx = 0; staffIdx < staffCount; staffIdx++) {
+                if (staffFilter !== null && staffFilter !== undefined &&
+                    staffIdx !== staffFilter) {
+                    continue;
+                }
+                var element = null;
+                try {
+                    element = segment.elementAt(staffIdx * 4);
+                } catch (e) {
+                    element = null;
+                }
+                if (!element || element.type !== Element.CLEF) continue;
+
+                var measureNumber = measureNumberFromBounds(bounds, segment.tick);
+                var measureStart = 0;
+                for (var b = 0; b < bounds.length; b++) {
+                    if (bounds[b].number === measureNumber) {
+                        measureStart = bounds[b].startTick;
+                        break;
+                    }
+                }
+                // `generated` is true for anything MuseScore laid out
+                // itself: the staff's opening clef and the courtesy clef
+                // it repeats at every system start. `false` means a clef
+                // someone inserted -- the MIDI-import leftovers included.
+                var isGenerated = (element.generated === true);
+
+                clefs.push({
+                    element: element,
+                    generated: isGenerated,
+                    info: {
+                        staff: staffIdx,
+                        measure: measureNumber,
+                        tick: segment.tick,
+                        tickInMeasure: segment.tick - measureStart,
+                        atMeasureStart: segment.tick === measureStart,
+                        generated: isGenerated,
+                        subtype: (element.subtype !== undefined)
+                            ? element.subtype : null,
+                        name: clefNameFromSubtype(element.subtype)
+                    }
+                });
+            }
+            segment = segmentValue(segment.next, segment);
+        }
+        return markRedundantClefs(clefs);
+    }
+
+    /// Mark clefs that restate the clef already in force on their staff.
+    ///
+    /// MuseScore's `generated` flag does NOT mean "courtesy clef": it is
+    /// true for a staff's opening clef too, because that one is laid out
+    /// from the staff's own clef property rather than authored. Treating
+    /// generated as redundant therefore hides every clef in a clean score
+    /// (verified: a 300-bar piano score reported zero). What it does mean
+    /// is `generated: false` == inserted by someone -- which is exactly
+    /// what MuseScore's MIDI import leaves mid-measure.
+    ///
+    /// So redundancy is derived from the reading instead: a clef whose
+    /// type matches the previous clef on the same staff changes nothing.
+    /// The generated flag only rescues the rare authored clef that
+    /// restates the current one -- inserted deliberately, so it is kept.
+    function markRedundantClefs(entries) {
+        var lastSubtype = {};
+        for (var i = 0; i < entries.length; i++) {
+            var info = entries[i].info;
+            var previous = lastSubtype[info.staff];
+            var restatesCurrent =
+                (previous !== undefined && previous === info.subtype);
+            info.redundant = restatesCurrent && info.generated !== false;
+            info.changesClef = !info.redundant;
+            lastSubtype[info.staff] = info.subtype;
+        }
+        return entries;
+    }
+
+    /// Resolve a segment accessor that may be a property or a method.
+    function segmentValue(accessor, owner) {
+        if (accessor === undefined || accessor === null) return null;
+        if (typeof accessor === "function") {
+            try {
+                return accessor.call(owner);
+            } catch (e) {
+                return null;
+            }
+        }
+        return accessor;
+    }
+
+    /// Reverse-map a ClefType integer to a name from clefTypes, or null
+    /// when it is a variant this plugin does not name.
+    function clefNameFromSubtype(subtype) {
+        if (subtype === undefined || subtype === null) return null;
+        var names = Object.keys(clefTypes);
+        for (var i = 0; i < names.length; i++) {
+            if (clefTypes[names[i]] === subtype) return names[i];
+        }
+        return null;
+    }
+
     /// Map a barline type string to the MuseScore enum value, or null.
     function barlineTypeFromString(typeString) {
         var value = barlineTypes[typeString];
@@ -677,8 +875,132 @@ MuseScore {
             REST: (typeof Element !== "undefined" && Element.REST !== undefined)
                 ? Element.REST : null,
             NOTE: (typeof Element !== "undefined" && Element.NOTE !== undefined)
-                ? Element.NOTE : null
+                ? Element.NOTE : null,
+            CLEF: (typeof Element !== "undefined" && Element.CLEF !== undefined)
+                ? Element.CLEF : null
         };
+
+        // Clef support probes. ClefType integers shift between MuseScore
+        // versions, so rather than trust the clefTypes table this reports
+        // the subtypes of the clefs ALREADY in the score -- in a piano
+        // score staff 0 is treble and staff 1 is bass, which pins the two
+        // values that matter. Read-only.
+        probe.capabilities.clef = {};
+
+        // Which score-level removal API exists? 0.4.0 development found
+        // curScore.removeElement undefined in 4.7.4, so every plausible
+        // alternative is listed rather than assumed.
+        try {
+            var removalNames = ["removeElement", "deleteElement", "remove",
+                "cmdRemove", "removeSelection"];
+            var removal = {};
+            for (var r = 0; r < removalNames.length; r++) {
+                removal[removalNames[r]] =
+                    curScore ? typeof curScore[removalNames[r]] : "no-score";
+            }
+            probe.capabilities.clef.removalApis = removal;
+            probe.capabilities.clef.selection = curScore ? {
+                select: typeof curScore.selection.select,
+                selectRange: typeof curScore.selection.selectRange,
+                clear: typeof curScore.selection.clear,
+                elements: typeof curScore.selection.elements
+            } : "no-score";
+        } catch (e) {
+            probe.capabilities.clef.removalError = e.message || String(e);
+        }
+
+        // Segment access. firstSegment reported as "function" in 4.7.4, so
+        // this records both the accessor kind and what the segment itself
+        // offers once obtained.
+        try {
+            probe.capabilities.clef.firstSegmentKind =
+                curScore ? typeof curScore.firstSegment : "no-score";
+            var seg = null;
+            if (curScore) {
+                seg = (typeof curScore.firstSegment === "function")
+                    ? curScore.firstSegment() : curScore.firstSegment;
+            }
+            probe.capabilities.clef.segment = seg ? {
+                next: typeof seg.next,
+                nextInMeasure: typeof seg.nextInMeasure,
+                elementAt: typeof seg.elementAt,
+                segmentType: typeof seg.segmentType,
+                segmentTypeValue: (seg.segmentType !== undefined)
+                    ? String(seg.segmentType) : null,
+                tick: (seg.tick !== undefined) ? seg.tick : null,
+                annotations: typeof seg.annotations
+            } : "no-segment";
+
+            // Walk a few segments and report every element found, so the
+            // real route to a Clef is visible rather than inferred.
+            var found = [];
+            var walk = seg;
+            var steps = 0;
+            while (walk && steps < 40) {
+                for (var t = 0; t < 8; t++) {
+                    var el = null;
+                    try {
+                        el = (typeof walk.elementAt === "function")
+                            ? walk.elementAt(t) : null;
+                    } catch (e2) { el = null; }
+                    if (el && el.type === Element.CLEF) {
+                        found.push({
+                            track: t,
+                            tick: walk.tick,
+                            type: el.type,
+                            subtype: (el.subtype !== undefined) ? el.subtype : null,
+                            generatedType: typeof el.generated,
+                            generated: (el.generated !== undefined)
+                                ? el.generated : null,
+                            concertClefType: (el.concertClefType !== undefined)
+                                ? el.concertClefType : null,
+                            userName: (typeof el.userName === "function")
+                                ? el.userName() : null
+                        });
+                    }
+                }
+                walk = (typeof walk.next === "function") ? walk.next() : walk.next;
+                steps++;
+            }
+            probe.capabilities.clef.walkFound = found;
+            probe.capabilities.clef.walkSteps = steps;
+        } catch (e) {
+            probe.capabilities.clef.segmentError = e.message || String(e);
+        }
+
+        // Which property on a Clef element is WRITABLE? subtype is
+        // read-only in 4.7.4; MuseScore's Pid enum suggests the concert /
+        // transposing pair, but the names are version-dependent.
+        try {
+            var writable = {};
+            var candidates = ["subtype", "clefType", "clefTypeConcert",
+                "clefTypeTransposing", "concertClefType",
+                "transposingClefType"];
+            for (var c = 0; c < candidates.length; c++) {
+                var fresh = newElement(Element.CLEF);
+                var name = candidates[c];
+                var entry = { exists: typeof fresh[name] };
+                try {
+                    fresh[name] = 21;   // F / bass
+                    entry.wrote = true;
+                    entry.readBack = fresh[name];
+                } catch (e3) {
+                    entry.wrote = false;
+                    entry.error = e3.message || String(e3);
+                }
+                writable[name] = entry;
+            }
+            probe.capabilities.clef.writableProps = writable;
+        } catch (e) {
+            probe.capabilities.clef.writableError = e.message || String(e);
+        }
+
+        try {
+            probe.capabilities.clef.observed = collectClefs(null);
+            probe.capabilities.clef.table = clefTypes;
+        } catch (e) {
+            probe.capabilities.clef.observedError = e.message || String(e);
+        }
 
         return { result: probe };
     }
@@ -748,6 +1070,19 @@ MuseScore {
             }
         }
 
+        // Mid-measure clefs are almost always unintended -- MuseScore's
+        // MIDI import inserts them to chase notes that stray out of a
+        // staff's range. Surfacing them here makes them discoverable
+        // without exporting and parsing MusicXML; getClefs has the rest.
+        var allClefs = collectClefs(null);
+        var midMeasure = [];
+        var realClefs = 0;
+        for (var c = 0; c < allClefs.length; c++) {
+            if (allClefs[c].redundant) continue;  // system courtesy clefs
+            realClefs++;
+            if (!allClefs[c].atMeasureStart) midMeasure.push(allClefs[c]);
+        }
+
         return {
             result: {
                 title: curScore.title || "",
@@ -756,7 +1091,58 @@ MuseScore {
                 measureCount: countMeasures(),
                 keySignature: keySig,
                 timeSignature: timeSig,
+                clefCount: realClefs,
+                midMeasureClefs: midMeasure,
                 pluginVersion: root.version
+            }
+        };
+    }
+
+    /// Every clef in the score, in tick order.
+    /// Params: { staff?: int }  (omit for all staves)
+    ///
+    /// `atMeasureStart: false` marks a mid-measure clef change -- the
+    /// kind MuseScore's MIDI import leaves behind, and the kind
+    /// removeClef is meant to clear.
+    function handleGetClefs(params) {
+        var scoreErr = requireScore();
+        if (scoreErr) return scoreErr;
+
+        var staffFilter = null;
+        if (params && params.staff !== undefined && params.staff !== null) {
+            staffFilter = safeParseInt(params.staff);
+            if (staffFilter === null) {
+                return { error: "Invalid value for staff: " + params.staff };
+            }
+            if (staffFilter < 0 || staffFilter >= curScore.nstaves) {
+                return { error: "Staff " + staffFilter + " out of range (0-" +
+                    (curScore.nstaves - 1) + ")" };
+            }
+        }
+
+        // Courtesy clefs at system starts outnumber real ones by an order
+        // of magnitude, so they are hidden unless explicitly asked for.
+        var includeRedundant = (params && params.includeRedundant === true);
+
+        var all = collectClefs(staffFilter);
+        var clefs = [];
+        var redundantCount = 0;
+        var midMeasureCount = 0;
+        for (var i = 0; i < all.length; i++) {
+            if (all[i].redundant) {
+                redundantCount++;
+                if (!includeRedundant) continue;
+            }
+            if (!all[i].atMeasureStart) midMeasureCount++;
+            clefs.push(all[i]);
+        }
+
+        return {
+            result: {
+                clefs: clefs,
+                count: clefs.length,
+                midMeasureCount: midMeasureCount,
+                redundantHidden: includeRedundant ? 0 : redundantCount
             }
         };
     }
@@ -780,6 +1166,19 @@ MuseScore {
             beat = Math.floor((cursor.tick - measureStartTick) / ticksPerBeat) + 1;
         }
 
+        // The clef governing this position: the last clef on this staff at
+        // or before the cursor tick. Without it an agent cannot tell which
+        // staff a pitch will actually read on after a mid-measure change.
+        var governing = null;
+        var staffClefs = collectClefs(cursorStaff);
+        for (var i = 0; i < staffClefs.length; i++) {
+            if (staffClefs[i].tick <= cursor.tick) {
+                governing = staffClefs[i];
+            } else {
+                break;  // collectClefs is tick-ordered
+            }
+        }
+
         return {
             result: {
                 measure: cursorMeasure,
@@ -787,7 +1186,8 @@ MuseScore {
                 voice: cursorVoice,
                 beat: beat,
                 tick: cursor.tick,
-                element: elementInfo
+                element: elementInfo,
+                clef: governing
             }
         };
     }
@@ -1294,6 +1694,347 @@ MuseScore {
         }
 
         return { result: { numerator: numerator, denominator: denominator, measure: cursorMeasure } };
+    }
+
+    /// Write a ClefType onto a Clef element.
+    ///
+    /// `subtype` is read-only in MuseScore 4.7.4; concertClefType and
+    /// transposingClefType are the writable pair. Returns true when at
+    /// least one assignment was accepted.
+    function applyClefType(clef, subtype) {
+        var applied = false;
+        var names = ["concertClefType", "transposingClefType"];
+        for (var i = 0; i < names.length; i++) {
+            // typeof guards against silently creating a JS expando on a
+            // build where the property does not exist -- an assignment to
+            // an unknown name "succeeds" without touching the score.
+            if (typeof clef[names[i]] === "number") {
+                clef[names[i]] = subtype;
+                applied = true;
+            }
+        }
+        return applied;
+    }
+
+    /// Resolve a clef request to a ClefType integer.
+    /// Accepts either { type: "bass" } or { subtype: 20 }.
+    function resolveClefSubtype(params) {
+        if (params.subtype !== undefined && params.subtype !== null) {
+            var raw = safeParseInt(params.subtype);
+            if (raw === null || raw < 0) {
+                return { error: "Invalid value for subtype: " + params.subtype };
+            }
+            return { subtype: raw, name: clefNameFromSubtype(raw) };
+        }
+        if (params.type === undefined || params.type === null || params.type === "") {
+            return { error: "Missing required parameter: type (or subtype). " +
+                "Valid types: " + Object.keys(clefTypes).join(", ") };
+        }
+        var value = clefTypes[params.type];
+        if (value === undefined) {
+            return { error: "Unknown clef type: " + params.type +
+                ". Valid types: " + Object.keys(clefTypes).join(", ") +
+                " (or pass an explicit ClefType integer as 'subtype')" };
+        }
+        return { subtype: value, name: params.type };
+    }
+
+    /// Insert a clef at the current cursor position.
+    /// Params: { type?: string, subtype?: int }
+    ///
+    /// The clef lands on the cursor's staff at the cursor's tick, so a
+    /// mid-measure clef change is written by seeking within the measure
+    /// first. Position with goToStaff/goToMeasure as usual.
+    function handleSetClef(params) {
+        var req = requireCursor();
+        if (req.error) return req.error;
+        var cursor = req.cursor;
+
+        var resolved = resolveClefSubtype(params);
+        if (resolved.error) return { error: resolved.error };
+
+        if (!cursor.segment) {
+            return { error: "No valid segment at cursor position" };
+        }
+
+        var postAddSubtype = null;
+        curScore.startCmd("setClef");
+        try {
+            var clef = newElement(Element.CLEF);
+            // Element.subtype is READ-ONLY in MuseScore 4.7.4 -- assigning
+            // to it throws. The writable pair is concertClefType /
+            // transposingClefType, and both are set so the clef reads the
+            // same in concert-pitch and transposed views.
+            applyClefType(clef, resolved.subtype);
+            cursor.add(clef);
+            // cursor.add clones the element for several element types in
+            // MuseScore 4 and the clone loses values assigned beforehand
+            // (this is what corrupts setKeySignature and setTempo).
+            // Re-assign and report what actually stuck, so a caller can
+            // tell a real write from a silently dropped one.
+            applyClefType(clef, resolved.subtype);
+            postAddSubtype = (clef.subtype !== undefined) ? clef.subtype : null;
+        } finally {
+            curScore.endCmd();
+        }
+
+        return {
+            result: {
+                type: resolved.name,
+                subtype: resolved.subtype,
+                postAddSubtype: postAddSubtype,
+                measure: cursorMeasure,
+                staff: cursorStaff,
+                tick: cursor.tick
+            }
+        };
+    }
+
+    /// Remove clefs from the score.
+    ///
+    /// Params: { staff?: int, measure?: int, startMeasure?, endMeasure?,
+    ///           tick?: int, midMeasureOnly?: bool, force?: bool }
+    ///
+    /// Every filter is optional and they intersect; with none given this
+    /// removes nothing unless midMeasureOnly is set, because deleting
+    /// every clef in a score is never what anyone means.
+    ///
+    /// The staff-defining clef at tick 0 is refused unless force is true:
+    /// removing it leaves the staff with no clef at all.
+    ///
+    /// The motivating case is MuseScore's MIDI import, which inserts
+    /// mid-measure clef changes to chase notes that stray out of range.
+    /// Once those notes are moved to the right staff the clefs remain and
+    /// have to be cleared: { staff: 1, midMeasureOnly: true }.
+    function handleRemoveClef(params) {
+        var plan = planClefRemoval(params);
+        if (plan.error) return plan.error;
+        if (plan.doomed.length === 0) return plan.emptyResult;
+
+        curScore.startCmd("removeClef");
+        try {
+            return applyClefRemoval(plan);
+        } finally {
+            curScore.endCmd();
+        }
+    }
+
+    /// Validate and resolve which clefs a removeClef request targets,
+    /// without touching the score. Returns { error } | { doomed, ... }.
+    function planClefRemoval(params) {
+        var scoreErr = requireScore();
+        if (scoreErr) return { error: scoreErr };
+
+        var midMeasureOnly = (params.midMeasureOnly === true);
+        var force = (params.force === true);
+
+        var staffFilter = null;
+        if (params.staff !== undefined && params.staff !== null) {
+            staffFilter = safeParseInt(params.staff);
+            if (staffFilter === null) {
+                return { error: { error: "Invalid value for staff: " + params.staff } };
+            }
+            if (staffFilter < 0 || staffFilter >= curScore.nstaves) {
+                return { error: { error: "Staff " + staffFilter +
+                    " out of range (0-" + (curScore.nstaves - 1) + ")" } };
+            }
+        }
+
+        var startMeasure = null;
+        var endMeasure = null;
+        if (params.measure !== undefined && params.measure !== null) {
+            startMeasure = safeParseInt(params.measure);
+            endMeasure = startMeasure;
+        } else {
+            if (params.startMeasure !== undefined && params.startMeasure !== null) {
+                startMeasure = safeParseInt(params.startMeasure);
+            }
+            if (params.endMeasure !== undefined && params.endMeasure !== null) {
+                endMeasure = safeParseInt(params.endMeasure);
+            }
+        }
+        if ((params.measure !== undefined && startMeasure === null) ||
+            (params.startMeasure !== undefined && startMeasure === null) ||
+            (params.endMeasure !== undefined && endMeasure === null)) {
+            return { error: { error: "Invalid measure range parameters" } };
+        }
+
+        var tickFilter = null;
+        if (params.tick !== undefined && params.tick !== null) {
+            tickFilter = safeParseInt(params.tick);
+            if (tickFilter === null) {
+                return { error: { error: "Invalid value for tick: " + params.tick } };
+            }
+        }
+
+        var noFilters = (staffFilter === null && startMeasure === null &&
+            endMeasure === null && tickFilter === null && !midMeasureOnly);
+        if (noFilters && !force) {
+            return { error: { error: "removeClef needs at least one filter " +
+                "(staff, measure, startMeasure/endMeasure, tick, or " +
+                "midMeasureOnly). Removing every clef in the score is " +
+                "almost certainly not intended; pass force: true if it is." } };
+        }
+
+        // Clef removal is IMPOSSIBLE in MuseScore Studio 4.7.4, verified
+        // 2026-07-27. Score-level removal does not exist (removeElement,
+        // deleteElement, remove, cmdRemove, removeSelection are all
+        // undefined) and the selection route cannot stand in for it:
+        // curScore.selection.select(clef) returns false for a Clef, so
+        // select+delete, select(add=false)+delete and
+        // select+delete-selection all leave the clef in place.
+        //
+        // Refused up front rather than attempted, because the attempt
+        // cannot be distinguished from success by the caller's reply
+        // alone. setClef DOES replace a clef at the same position, so an
+        // unwanted clef can be overwritten even though it cannot be
+        // deleted -- that is the documented workaround.
+        if (params.__experimental !== true) {
+            return { error: { error: "removeClef is disabled: MuseScore " +
+                "Studio 4.7.4 exposes no way to delete a clef from a " +
+                "plugin (curScore.removeElement is undefined and " +
+                "selection.select() returns false for a Clef, so " +
+                "cmd(\"delete\") has nothing to act on). Delete the clef " +
+                "in the MuseScore UI, or use setClef to overwrite it -- " +
+                "setClef replaces a clef at the same position rather than " +
+                "stacking. Pass __experimental: true to probe anyway." } };
+        }
+
+        var entries = collectClefEntries(staffFilter);
+        var doomed = [];
+        var skippedHeader = 0;
+        for (var i = 0; i < entries.length; i++) {
+            var info = entries[i].info;
+            // A courtesy clef at a system start is laid out, not authored.
+            // Deleting one deletes the clef it restates.
+            if (info.redundant) continue;
+            if (midMeasureOnly && info.atMeasureStart) continue;
+            if (startMeasure !== null && info.measure < startMeasure) continue;
+            if (endMeasure !== null && info.measure > endMeasure) continue;
+            if (tickFilter !== null && info.tick !== tickFilter) continue;
+            if (info.tick === 0 && !force) {
+                skippedHeader++;
+                continue;
+            }
+            doomed.push(entries[i]);
+        }
+
+        return {
+            doomed: doomed,
+            skippedHeader: skippedHeader,
+            emptyResult: {
+                result: {
+                    removed: 0,
+                    clefs: [],
+                    skippedStaffDefining: skippedHeader
+                }
+            }
+        };
+    }
+
+    /// Delete the clefs a plan selected. The caller owns the command
+    /// group, so this is safe to call from inside processSequence.
+    function applyClefRemoval(plan) {
+        var removedInfos = [];
+        var failed = [];
+        // Reverse order: removing a clef re-lays-out the score, and taking
+        // the later ones first keeps the earlier entries valid.
+        var diagnostics = [];
+        for (var j = plan.doomed.length - 1; j >= 0; j--) {
+            var outcome = { ok: false, attempts: [] };
+            try {
+                outcome = removeOneElement(
+                    plan.doomed[j].element, plan.doomed[j].info);
+            } catch (e) {
+                outcome = { ok: false, error: e.message || String(e), attempts: [] };
+            }
+            if (outcome.ok) {
+                removedInfos.unshift(plan.doomed[j].info);
+                if (diagnostics.length === 0) diagnostics.push(outcome.strategy);
+            } else {
+                failed.unshift(plan.doomed[j].info);
+                if (diagnostics.length === 0) {
+                    diagnostics.push({ failedAttempts: outcome.attempts });
+                }
+            }
+        }
+        var result = {
+            removed: removedInfos.length,
+            clefs: removedInfos,
+            skippedStaffDefining: plan.skippedHeader,
+            strategy: diagnostics.length > 0 ? diagnostics[0] : null
+        };
+        if (failed.length > 0) {
+            result.failed = failed;
+            result.note = "Some clefs could not be removed. Deleting them " +
+                "in the MuseScore UI is the reliable route.";
+        }
+        return { result: result };
+    }
+
+    /// Delete one element, by whichever route this build supports.
+    ///
+    /// MuseScore 4.7.4 exposes no score-level removal, so the routes are
+    /// selection-based and none is documented to work on a Clef. Each is
+    /// tried and then VERIFIED against the score -- a reply of "deleted"
+    /// that leaves the clef in place is the failure mode to avoid here.
+    ///
+    /// Every route clears the selection first. Without that, a failed
+    /// select would leave the previous selection standing and cmd("delete")
+    /// would delete whatever was selected before -- notes, most likely.
+    /// Range selection is deliberately not attempted for the same reason:
+    /// a range around the clef contains the music too.
+    function removeOneElement(element, info) {
+        var attempts = [];
+
+        if (typeof curScore.removeElement === "function") {
+            try {
+                curScore.removeElement(element);
+                if (!clefStillPresent(info)) {
+                    return { ok: true, strategy: "removeElement", attempts: attempts };
+                }
+                attempts.push({ strategy: "removeElement", selected: null });
+            } catch (e) {
+                attempts.push({ strategy: "removeElement", error: e.message || String(e) });
+            }
+        }
+
+        var selectionRoutes = [
+            { name: "select+delete", args: 1, action: "delete" },
+            { name: "select(add=false)+delete", args: 2, action: "delete" },
+            { name: "select+delete-selection", args: 1, action: "delete-selection" }
+        ];
+        for (var i = 0; i < selectionRoutes.length; i++) {
+            var route = selectionRoutes[i];
+            try {
+                curScore.selection.clear();
+                var selected = (route.args === 2)
+                    ? curScore.selection.select(element, false)
+                    : curScore.selection.select(element);
+                // The return value is NOT trusted as a gate: a build may
+                // select successfully and return undefined. The score is
+                // the authority, so the command runs either way -- safe
+                // because the selection was cleared first.
+                cmd(route.action);
+                if (!clefStillPresent(info)) {
+                    return { ok: true, strategy: route.name, attempts: attempts };
+                }
+                attempts.push({ strategy: route.name, selected: String(selected) });
+            } catch (e) {
+                attempts.push({ strategy: route.name, error: e.message || String(e) });
+            }
+        }
+        return { ok: false, strategy: null, attempts: attempts };
+    }
+
+    /// Is a clef still in the score at the position an entry described?
+    /// Re-walks rather than trusting a stale element handle.
+    function clefStillPresent(info) {
+        var entries = collectClefEntries(info.staff);
+        for (var i = 0; i < entries.length; i++) {
+            if (entries[i].info.tick === info.tick) return true;
+        }
+        return false;
     }
 
     /// Set a tempo marking at the current cursor position.
@@ -1821,6 +2562,37 @@ MuseScore {
                 tempoMark.followText = false;
                 tempoCursor.add(tempoMark);
                 return { result: { bpm: bpm, text: tempoText, measure: cursorMeasure } };
+            }
+
+            case "setClef": {
+                var clefResolved = resolveClefSubtype(params);
+                if (clefResolved.error) return { error: clefResolved.error };
+                var clefCursor = positionedCursor();
+                if (!clefCursor) return { error: "Could not position cursor" };
+                if (!clefCursor.segment) return { error: "No valid segment at cursor position" };
+                var newClef = newElement(Element.CLEF);
+                // subtype is read-only; see applyClefType.
+                applyClefType(newClef, clefResolved.subtype);
+                clefCursor.add(newClef);
+                applyClefType(newClef, clefResolved.subtype);
+                return {
+                    result: {
+                        type: clefResolved.name,
+                        subtype: clefResolved.subtype,
+                        measure: cursorMeasure,
+                        staff: cursorStaff
+                    }
+                };
+            }
+
+            case "removeClef": {
+                // processSequence owns the command group, so this uses the
+                // split plan/apply pair rather than handleRemoveClef (which
+                // opens a group of its own).
+                var removalPlan = planClefRemoval(params);
+                if (removalPlan.error) return removalPlan.error;
+                if (removalPlan.doomed.length === 0) return removalPlan.emptyResult;
+                return applyClefRemoval(removalPlan);
             }
 
             case "addChordSymbol": {

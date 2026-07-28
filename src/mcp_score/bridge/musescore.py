@@ -277,6 +277,78 @@ class MuseScoreBridge(ScoreBridge):
             {"numerator": numerator, "denominator": denominator},
         )
 
+    async def get_clefs(self, staff: int | None = None) -> dict[str, Any]:
+        """List every clef in the score, in tick order.
+
+        Each entry carries ``staff``, ``measure``, ``tick``,
+        ``tickInMeasure``, ``atMeasureStart``, ``subtype`` and ``name``.
+        ``atMeasureStart: False`` marks a mid-measure clef change -- the
+        kind MuseScore's MIDI import inserts to chase out-of-range notes.
+
+        Args:
+            staff: Restrict to one staff (0-indexed). ``None`` reports all.
+        """
+        params: dict[str, Any] = {}
+        if staff is not None:
+            params["staff"] = staff
+        return await self.send_command("getClefs", params)
+
+    async def set_clef(
+        self, clef_type: str | None = None, subtype: int | None = None
+    ) -> dict[str, Any]:
+        """Insert a clef at the current cursor position.
+
+        Args:
+            clef_type: One of treble, treble8vb, treble8va, alto, tenor,
+                bass, bass8vb, percussion.
+            subtype: Raw MuseScore ClefType integer, for variants the
+                named table does not cover (treble is 0 and bass is 20 in
+                MuseScore Studio 4.7.4; the values shift between
+                versions). Takes precedence over *clef_type*.
+        """
+        params: dict[str, Any] = {}
+        if subtype is not None:
+            params["subtype"] = subtype
+        elif clef_type is not None:
+            params["type"] = clef_type
+        return await self.send_command("setClef", params)
+
+    async def remove_clef(
+        self,
+        staff: int | None = None,
+        measure: int | None = None,
+        start_measure: int | None = None,
+        end_measure: int | None = None,
+        tick: int | None = None,
+        mid_measure_only: bool = False,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Remove clefs matching every filter given.
+
+        At least one filter is required -- the plugin refuses an
+        unfiltered call rather than stripping the score of clefs. The
+        staff-defining clef at tick 0 is skipped unless *force* is set.
+
+        The motivating case is cleaning up after MuseScore's MIDI import:
+        ``remove_clef(staff=1, mid_measure_only=True)``.
+        """
+        params: dict[str, Any] = {}
+        if staff is not None:
+            params["staff"] = staff
+        if measure is not None:
+            params["measure"] = measure
+        if start_measure is not None:
+            params["startMeasure"] = start_measure
+        if end_measure is not None:
+            params["endMeasure"] = end_measure
+        if tick is not None:
+            params["tick"] = tick
+        if mid_measure_only:
+            params["midMeasureOnly"] = True
+        if force:
+            params["force"] = True
+        return await self.send_command("removeClef", params)
+
     async def set_tempo(self, bpm: int, text: str | None = None) -> dict[str, Any]:
         """Set the tempo."""
         params: dict[str, Any] = {"bpm": bpm}

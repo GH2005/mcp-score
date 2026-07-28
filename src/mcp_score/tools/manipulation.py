@@ -42,6 +42,38 @@ _CORRUPTION_GUARD_ERROR = (
     "write garbage into the score."
 )
 
+#: Clef names the plugin's clefTypes table understands. Mirrored here so
+#: the tool can reject a typo with the valid list instead of round-tripping
+#: to MuseScore for the same answer.
+_CLEF_TYPES = frozenset(
+    {
+        "treble",
+        "treble8vb",
+        "treble8va",
+        "alto",
+        "tenor",
+        "bass",
+        "bass8vb",
+        "percussion",
+    }
+)
+
+#: Clef deletion has no implementation in MuseScore Studio 4.7.4: the
+#: plugin API exposes no element removal, and the selection route cannot
+#: substitute because selection.select() rejects a Clef. Verified
+#: 2026-07-27 against plugin 0.4.5 -- see the playbook's broken table.
+_CLEF_REMOVAL_UNSUPPORTED = (
+    "Clefs cannot be removed through MuseScore Studio 4.7.4's plugin API: "
+    "there is no element-removal call (curScore.removeElement and friends "
+    "are undefined), and selecting a clef to delete it does not work "
+    "either (selection.select() returns false for a Clef, leaving "
+    'cmd("delete") nothing to act on). Two things do work: set_live_clef '
+    "OVERWRITES a clef at the same position rather than stacking, so an "
+    "unwanted clef change can be replaced with the clef that should govern "
+    "there; or delete it by hand in MuseScore (click the clef, press "
+    "Delete). Use get_live_clefs to locate the clefs first."
+)
+
 _MUSESCORE_ONLY_ERROR = (
     "{tool} is only supported with MuseScore. {app}'s Remote Control API "
     "does not expose this operation."
@@ -178,6 +210,118 @@ async def set_live_tempo(measure: int, bpm: int, text: str | None = None) -> str
     await bridge.go_to_measure(measure)
     result = await bridge.set_tempo(bpm, text)
     return to_json(result)
+
+
+@mcp.tool()
+async def get_live_clefs(staff: int | None = None) -> str:
+    """List the clefs in the live score, including mid-measure changes.
+
+    Use this when a staff reads oddly, when notes appear on the wrong
+    staff, or before removing clefs — it is the only way to see clef
+    changes that sit *inside* a measure rather than at its start.
+
+    Entries with ``atMeasureStart: false`` are mid-measure clef changes.
+    MuseScore's MIDI import inserts them automatically to accommodate
+    notes that stray out of a staff's range, and they are usually left
+    behind as clutter once the notes are moved to the right staff.
+
+    Args:
+        staff: Restrict to one staff (0-indexed). Omit to list all staves.
+    """
+    bridge = connected_bridge()
+    if bridge is None:
+        return to_json({"error": NOT_CONNECTED})
+    if error := _require_musescore(bridge, "get_live_clefs"):
+        return error
+    assert isinstance(bridge, MuseScoreBridge)
+
+    result = await bridge.get_clefs(staff)
+    return to_json(result)
+
+
+@mcp.tool()
+async def set_live_clef(
+    measure: int,
+    clef_type: str,
+    staff: int = 0,
+) -> str:
+    """Set the clef for a staff from a measure onwards, in the live score.
+
+    The clef takes effect at the start of *measure* and governs the staff
+    until the next clef change. Use it when a part sits persistently
+    above or below its staff — a bass line that has climbed into ledger
+    lines wants a treble clef, not an octave transposition.
+
+    Args:
+        measure: Measure number (1-indexed) where the clef takes effect.
+        clef_type: One of treble, treble8vb, treble8va, alto, tenor,
+            bass, bass8vb, percussion.
+        staff: Staff index (0-indexed).
+    """
+    bridge = connected_bridge()
+    if bridge is None:
+        return to_json({"error": NOT_CONNECTED})
+    if error := check_measure(measure):
+        return error
+    if error := _require_musescore(bridge, "set_live_clef"):
+        return error
+    if clef_type not in _CLEF_TYPES:
+        return to_json(
+            {
+                "error": f"Unknown clef type {clef_type!r}. Valid types: "
+                + ", ".join(sorted(_CLEF_TYPES))
+            }
+        )
+    assert isinstance(bridge, MuseScoreBridge)
+
+    await bridge.go_to_staff(staff)
+    await bridge.go_to_measure(measure)
+    result = await bridge.set_clef(clef_type)
+    return to_json(result)
+
+
+@mcp.tool()
+async def remove_live_clefs(
+    staff: int | None = None,
+    measure: int | None = None,
+    start_measure: int | None = None,
+    end_measure: int | None = None,
+    mid_measure_only: bool = False,
+) -> str:
+    """Remove clefs from the live score.
+
+    Not possible in MuseScore Studio 4.7.4 — this tool refuses and
+    explains the two routes that do work. Deleting a clef needs an
+    element-removal API the plugin interface does not provide.
+
+    The motivating case is the mid-measure clef changes MuseScore's MIDI
+    import leaves behind. To clear those: overwrite them with
+    ``set_live_clef`` (a clef written at an existing clef's position
+    replaces it), or delete them by hand in MuseScore. Use
+    ``get_live_clefs`` to locate them first.
+
+    Args:
+        staff: Restrict to one staff (0-indexed).
+        measure: Restrict to a single measure (1-indexed).
+        start_measure: First measure of a range (1-indexed).
+        end_measure: Last measure of a range (inclusive, 1-indexed).
+        mid_measure_only: Only remove clef changes that sit inside a
+            measure, leaving clefs at measure starts alone.
+    """
+    bridge = connected_bridge()
+    if bridge is None:
+        return to_json({"error": NOT_CONNECTED})
+    if error := _require_musescore(bridge, "remove_live_clefs"):
+        return error
+    for value, name in (
+        (measure, "measure"),
+        (start_measure, "start_measure"),
+        (end_measure, "end_measure"),
+    ):
+        if value is not None and (error := check_measure(value, name)):
+            return error
+
+    return to_json({"error": _CLEF_REMOVAL_UNSUPPORTED})
 
 
 @mcp.tool()
