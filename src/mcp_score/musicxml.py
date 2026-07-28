@@ -97,8 +97,19 @@ def _measure_info(measure: stream.Measure) -> dict[str, Any]:
     """Normalize one measure: events plus attributes and annotations."""
     info: dict[str, Any] = {"events": _events(measure)}
 
-    clefs = [c.classes[0] for c in measure.getElementsByClass(clef.Clef)]
+    # recurse() rather than getElementsByClass: a mid-measure clef change
+    # can sit inside a Voice, where a shallow scan misses it entirely. The
+    # offset is what distinguishes a normal staff clef (0.0) from the
+    # mid-measure changes MuseScore's MIDI import leaves behind.
+    clefs = [
+        {
+            "sign": c.classes[0],
+            "offset": round(float(c.getOffsetInHierarchy(measure)), 4),
+        }
+        for c in measure.recurse().getElementsByClass(clef.Clef)
+    ]
     if clefs:
+        clefs.sort(key=lambda c: (c["offset"], c["sign"]))
         info["clef"] = clefs
     keys = [ks.sharps for ks in measure.recurse().getElementsByClass(key.KeySignature)]
     if keys:

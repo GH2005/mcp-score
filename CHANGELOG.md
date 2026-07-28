@@ -9,9 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 
 - Score generation via Claude Code skill (music21 -> MusicXML)
-- MCP server with 28 tools for live score manipulation (MuseScore, Dorico, Sibelius)
+- MCP server with 31 tools for live score manipulation (MuseScore, Dorico, Sibelius)
 - Multi-bridge architecture: MuseScore QML plugin, Dorico Remote Control, Sibelius Connect
-- MuseScore 4 QML plugin with WebSocket bridge (23 commands, native api.websocketserver transport)
+- MuseScore 4 QML plugin with WebSocket bridge (26 commands, native api.websocketserver transport)
 - CLI install commands: `mcp-score install-skill`, `mcp-score install-plugin`
 - Comprehensive test suite (388 tests: 282 mocked + 106 live against a running MuseScore)
 - Full documentation (architecture, reference, getting-started)
@@ -34,6 +34,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - `transpose_passage` gained diatonic motion: `degrees` plus `key` moves a passage by scale steps and keeps it in the key (`degrees=2` is "up a third"), reporting every chromatic note it pulled onto the scale. `semitones` remains the chromatic path; exactly one of the two is required
 - `realize_harmony` reports `metadata`: root, bass, inversion, quality, and the key a secondary function tonicizes
 - Snapshots record a note's tie type, so the transformations that re-enter music can refuse a tied passage instead of re-attacking the far side of the tie
+- Clef support (plugin 0.4.5): `getClefs`, `setClef` and `removeClef` wire commands with `get_live_clefs` and `set_live_clef` tools. `getClefs` reports every clef with its measure, tick, whether it sits at a measure start, and whether MuseScore generated it, hiding the courtesy clefs restated at each system start. `setClef` writes any of eight named clefs at a measure start or mid-measure, and replaces a clef already at that position rather than stacking
+- Clefs surface in the existing reads: `getScore` carries `clefCount` and `midMeasureClefs`, `getCursorInfo` carries the clef governing the cursor, and each measure's `clef` in a snapshot is now a list of `{sign, offset}` -- the offset being what distinguishes a mid-measure clef change from a normal staff clef
 
 ### Changed
 
@@ -44,7 +46,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Plugin transport ported to MuseScore's native `api.websocketserver` (the QtWebSockets QML module does not exist in MuseScore 4's plugin runtime)
 - `read_passage`/`get_measure_content` rewritten onto the export-based ground-truth path for MuseScore (the cursor walk saw at most the first element of a measure)
 - Plugin tracks the intra-measure cursor position so consecutive `addNote` commands accumulate instead of overwriting
-- Plugin version bumped to 0.3.0
+- Plugin version bumped to 0.4.5
 
 ### Fixed
 
@@ -62,6 +64,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Commands that crash MuseScore Studio 4.7.4 outright (`setBarline`, `addChordSymbol`, `addDynamic`) are gated behind an explicit `__experimental` flag and refused by the MCP tools
 - Commands that silently corrupt the score in MuseScore Studio 4.7.4 (`setKeySignature`, `setTempo`) are guarded with explanatory errors
 - `exportScore` rejects the `mscz` format (writes a 0-byte file and blocks MuseScore with a modal dialog in 4.7.4)
+- `removeClef` is refused: MuseScore Studio 4.7.4 exposes no element-removal call and `selection.select()` returns false for a Clef, so no deletion route exists. The tool explains the two that do work (overwrite via `set_live_clef`, or delete by hand) rather than reporting a removal that did not happen
 
 - Skill now asks user for missing metadata (title, composer, arranger, subtitle, copyright) instead of silently using defaults
 - Chord repetition intervals are context-aware: divides phrase length evenly instead of fixed "every 4 bars"

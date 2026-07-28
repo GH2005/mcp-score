@@ -16,6 +16,7 @@ from mcp_score.tools import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 
@@ -1817,3 +1818,147 @@ class TestTransformPassage:
 
         assert "out of range" in result["error"]
         mock_bridge.set_pitches.assert_not_awaited()
+
+
+class TestClefTools:
+    """Clef tools: guards, validation, and parameter mapping."""
+
+    @staticmethod
+    def _musescore_mock() -> AsyncMock:
+        mock_bridge = AsyncMock(spec=MuseScoreBridge)
+        mock_bridge.is_connected = True
+        return mock_bridge
+
+    @pytest.mark.anyio()
+    async def test_get_live_clefs_requires_connection(self) -> None:
+        from mcp_score.tools.manipulation import get_live_clefs
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=None):
+            result = json.loads(await get_live_clefs())
+
+        assert "Not connected" in result["error"]
+
+    @pytest.mark.anyio()
+    async def test_get_live_clefs_passes_staff_through(self) -> None:
+        from mcp_score.tools.manipulation import get_live_clefs
+
+        mock_bridge = self._musescore_mock()
+        mock_bridge.get_clefs = AsyncMock(return_value={"result": {"clefs": []}})
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            await get_live_clefs(staff=1)
+
+        mock_bridge.get_clefs.assert_awaited_once_with(1)
+
+    @pytest.mark.anyio()
+    async def test_get_live_clefs_rejects_non_musescore_bridge(self) -> None:
+        from mcp_score.tools.manipulation import get_live_clefs
+
+        mock_bridge = AsyncMock()
+        mock_bridge.is_connected = True
+        mock_bridge.application_name = "Dorico"
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(await get_live_clefs())
+
+        assert "only supported with MuseScore" in result["error"]
+
+    @pytest.mark.anyio()
+    async def test_set_live_clef_rejects_unknown_type(self) -> None:
+        """A typo must come back with the valid list, not reach MuseScore."""
+        from mcp_score.tools.manipulation import set_live_clef
+
+        mock_bridge = self._musescore_mock()
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(await set_live_clef(1, "trebble"))
+
+        assert "Unknown clef type" in result["error"]
+        assert "treble" in result["error"]
+        mock_bridge.set_clef.assert_not_awaited()
+
+    @pytest.mark.anyio()
+    async def test_set_live_clef_rejects_measure_zero(self) -> None:
+        from mcp_score.tools.manipulation import set_live_clef
+
+        mock_bridge = self._musescore_mock()
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(await set_live_clef(0, "bass"))
+
+        assert "must be >= 1" in result["error"]
+        mock_bridge.set_clef.assert_not_awaited()
+
+    @pytest.mark.anyio()
+    async def test_set_live_clef_positions_staff_before_measure(self) -> None:
+        """Staff first, then measure: goToStaff resets the intra-measure
+        tick, so doing it after goToMeasure would discard the position."""
+        from mcp_score.tools.manipulation import set_live_clef
+
+        mock_bridge = self._musescore_mock()
+        mock_bridge.set_clef = AsyncMock(return_value={"result": {"type": "bass"}})
+        calls: list[str] = []
+
+        def record(label: str) -> Callable[..., None]:
+            def _record(*_args: object, **_kwargs: object) -> None:
+                calls.append(label)
+
+            return _record
+
+        mock_bridge.go_to_staff = AsyncMock(side_effect=record("staff"))
+        mock_bridge.go_to_measure = AsyncMock(side_effect=record("measure"))
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            await set_live_clef(4, "bass", staff=1)
+
+        assert calls == ["staff", "measure"]
+        mock_bridge.go_to_staff.assert_awaited_once_with(1)
+        mock_bridge.go_to_measure.assert_awaited_once_with(4)
+        mock_bridge.set_clef.assert_awaited_once_with("bass")
+
+    @pytest.mark.anyio()
+    async def test_remove_live_clefs_refuses_and_never_reaches_musescore(self) -> None:
+        """Clef deletion is impossible in MuseScore Studio 4.7.4.
+
+        The tool must refuse up front rather than send a command that
+        cannot succeed: the plugin's reply to a failed removal looks
+        enough like a success to be mistaken for one.
+        """
+        from mcp_score.tools.manipulation import remove_live_clefs
+
+        mock_bridge = self._musescore_mock()
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(
+                await remove_live_clefs(
+                    staff=1, start_measure=2, end_measure=6, mid_measure_only=True
+                )
+            )
+
+        assert "cannot be removed" in result["error"]
+        mock_bridge.remove_clef.assert_not_awaited()
+
+    @pytest.mark.anyio()
+    async def test_remove_live_clefs_names_both_workarounds(self) -> None:
+        """A refusal is only useful if it says what to do instead."""
+        from mcp_score.tools.manipulation import remove_live_clefs
+
+        mock_bridge = self._musescore_mock()
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(await remove_live_clefs(staff=0))
+
+        assert "set_live_clef" in result["error"]
+        assert "get_live_clefs" in result["error"]
+
+    @pytest.mark.anyio()
+    async def test_remove_live_clefs_rejects_measure_zero(self) -> None:
+        from mcp_score.tools.manipulation import remove_live_clefs
+
+        mock_bridge = self._musescore_mock()
+
+        with patch("mcp_score.tools.get_active_bridge", return_value=mock_bridge):
+            result = json.loads(await remove_live_clefs(start_measure=0))
+
+        assert "start_measure must be >= 1" in result["error"]
+        mock_bridge.remove_clef.assert_not_awaited()
