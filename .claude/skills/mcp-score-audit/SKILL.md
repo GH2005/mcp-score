@@ -10,21 +10,31 @@ description: >
   "audit mcp-score", "re-verify the bridge", "the plugin/server is broken
   again", "find feature gaps in mcp-score", "add a new wire command or MCP
   tool", or when resuming a test-and-fix campaign over the plugin or the
-  server. Distinct from the musescore-bridge skill: that one records the
+  server. The audit also covers the surfaces that are not ours but that
+  the workflow depends on: what this MuseScore build's MusicXML importer
+  understands, what survives a copy-paste between documents, and what the
+  read_passage digest exposes versus a full export. Use when asked to
+  "re-verify what survives a paste", "does MuseScore still import X",
+  "check notation fidelity", "re-run the notation probe", or after
+  "MuseScore updated" -- those facts are pinned to a MuseScore version and
+  drift silently.
+  Distinct from the musescore-bridge skill: that one records the
   current verified state, this one is the procedure that regenerates it.
   A campaign is not finished when the code works: it is finished when the
   musescore-bridge skill tells the model how AND when to use the feature,
   because the user describes music and never names a skill or a tool.
 metadata:
-  version: "1.1"
+  version: "1.2"
 ---
 
 # mcp-score audit & repair
 
 A **process** skill. The `musescore-bridge` skill holds the current
-verified state (support matrix, safety rules); this one is the procedure
-that regenerates that state after the plugin or server has drifted, broken,
-or grown a gap.
+verified state — the support matrix and safety rules for the live path,
+the routing tables that pick between the live and file paths, and the
+import/paste fidelity tables in `authoring-musicxml.md`. This one is the
+procedure that regenerates that state after the plugin, the server, or
+MuseScore itself has drifted, broken, or grown a gap.
 
 ## Rule 0 — the inventory comes from source, never from documentation
 
@@ -71,9 +81,11 @@ comm -23 <(sed -n 's/.*case "\([A-Za-z]*\)":[[:space:]]*return handle.*/\1/p' $Q
 ```
 
 Record the three lists as the campaign checklist before touching anything.
-Counts at last audit (2026-07-25, plugin 0.3.0): 23 wire commands, 15
-sequence actions, 28 MCP tools. Treat those as a staleness signal, not as
-the answer — re-derive them.
+Counts last re-derived 2026-08-24 against plugin 0.4.5: 26 wire commands,
+17 sequence actions, 31 MCP tools. Treat those as a staleness signal, not
+as the answer — re-derive them. (They drift fast: the previous figures
+here, 23/15/28 at plugin 0.3.0, were wrong on all three by the time
+anyone looked.)
 
 **Musical logic belongs in Python, not QML.** The plugin is deliberately
 theory-free: it stores pitches and spellings (tpc integers) that
@@ -120,6 +132,51 @@ Classify each surface: **works** / **broken** (record the exact failure
 mode and how it presents) / **missing**. That classification is the input
 to Phase 5 — capture it as you go, not from memory afterwards.
 
+## Phase 3b — Re-verify the environment surfaces
+
+Not our code, but the workflow rests on them, and they move when MuseScore
+updates rather than when we commit. This phase regenerates them. Import
+fidelity and paste survival are recorded in
+`musescore-bridge/authoring-musicxml.md`; digest coverage is recorded in
+the reading routing table in `musescore-bridge/SKILL.md`, because it
+decides which read route to take.
+Include this phase whenever MuseScore's version has changed since the
+banner date, and whenever the campaign was triggered by a notation or
+paste question.
+
+```bash
+S=.claude/skills
+V="$S/musescore-bridge/scripts/verify_fragment.py"
+
+# (A) Import fidelity — ~46 constructs, one cluster per bar.
+uv run python $S/mcp-score-audit/scripts/notation_probe.py /tmp/probe.musicxml
+uv run python "$V" /tmp/probe.musicxml       # structure + import + round-trip diff
+
+# (B) Paste survival — needs a human: they paste it, then you audit.
+uv run python $S/mcp-score-audit/scripts/paste_probe.py /tmp/paste.musicxml
+# ... user appends measures and pastes at bar N, then:
+#   export_live_score -> /tmp/after.musicxml
+uv run python "$V" /tmp/paste.musicxml --against /tmp/after.musicxml --from-measure N
+```
+
+- **(A) is fully automatic** — `verify_fragment.py` shells out to
+  MuseScore's own converter, so no human and no open score is needed.
+  Exit 0 plus a clean round-trip diff means the importer still behaves.
+- **(B) needs the user** to press Ctrl+V; there is no plugin API for
+  paste. Ask, then audit what landed. The survival split to expect:
+  note- and staff-attached markings survive; measure- and system-level
+  ones (key, meter, repeats, voltas, barline styles, rehearsal marks,
+  tempo marks, dashed lines) do not.
+- **(C) digest coverage** — read one feature-rich bar of the probe with
+  `read_passage` and compare against the same bar in a full
+  `export_live_score`. Record what the digest exposes and what it hides.
+  Watch specifically for the fabricated tempo `text` (music21 names a
+  tempo from its number, so _Andante_ reports as "maestoso"); if a server
+  change fixes that, the note in `SKILL.md` must go.
+
+A regression here is not a bug to fix in our code — it is a fact to
+re-record, and possibly a routing rule to change.
+
 ## Phase 4 — Fix or implement
 
 End-to-end path for a command:
@@ -153,6 +210,15 @@ documented state matches reality.
    between the works/broken tables, add new surfaces, and update the
    banner's **verification date** and **plugin version**.
 
+   If Phase 3b ran, update `authoring-musicxml.md` too — its survival
+   tables, its downgrade list, and its banner's **verification date and
+   MuseScore version**. That file makes version-pinned claims about
+   software we do not control, so a stale date there is a stronger
+   warning than a stale date in the playbook. If a route changed hands
+   (something the bridge could not write becoming writable, or vice
+   versa), the routing tables in `SKILL.md` change with it — that is the
+   part that decides behaviour.
+
 2. **Make the feature reachable without anyone asking for it.** This is
    the step most easily mistaken for done.
 
@@ -182,17 +248,22 @@ documented state matches reality.
    > fires on _"give the left hand its own line"_ and the habits table
    > says to use `voice=1` rather than stacking a chord into voice 0.
 
-3. Update the six safety rules in `SKILL.md` only if a safety-relevant
-   fact changed. Keep them a subset — the playbook stays the single
-   source of truth; do not let the two drift into rival lists. The same
-   applies to the habits table: it is the imperative short form of the
-   playbook's composing loop, not a second opinion.
+3. Update the safety rules in `SKILL.md` only if a safety-relevant fact
+   changed — the seven numbered rules for the live path, and F1–F4 for
+   the file path. Keep the numbering stable: the playbook and this skill
+   both cite rules by number. Keep them a subset — the playbook stays the
+   single source of truth for the live path,
+   `authoring-musicxml.md` for the file path; do not let them drift into
+   rival lists. The same applies to the habits table: it is the
+   imperative short form of the playbook's composing loop, not a second
+   opinion.
 
-4. **Prove coverage** — mechanically, in two places. The playbook check is
-   what would have caught the 2026-07-22 gap; the `SKILL.md` check is what
-   catches a tool that is documented but unreachable, because `SKILL.md`
-   is what loads when the skill fires and the playbook is only read if
-   something already sent you there.
+4. **Prove coverage** — mechanically, in three checks. The playbook check
+   is what would have caught the 2026-07-22 gap; the `SKILL.md` check is
+   what catches a tool that is documented but unreachable, because
+   `SKILL.md` is what loads when the skill fires and the playbook is only
+   read if something already sent you there; the script check is what
+   catches the file path going dark without any test failing.
 
 ```bash
 PB=.claude/skills/musescore-bridge/agent-playbook.md
@@ -214,12 +285,20 @@ done
 echo "$TOOLS" | while read -r n; do
   grep -q "\b$n\b" "$SK" || echo "UNREACHABLE (not in SKILL.md): $n"
 done
+
+# The file path is only reachable if its scripts still run. A silently
+# broken builder disables the whole notation route without any test failing.
+uv run python .claude/skills/mcp-score-audit/scripts/notation_probe.py /tmp/_smoke.musicxml \
+  && uv run python .claude/skills/musescore-bridge/scripts/verify_fragment.py /tmp/_smoke.musicxml \
+  || echo "BROKEN: MusicXML authoring scripts"
 ```
 
-Both scripts passing still only proves the names are present. Read the
-description back and ask honestly: _if the user said nothing but a
-musical instruction, would this fire, and would I know which tool to
-reach for?_ If not, the campaign is not finished.
+The two name checks passing only proves the names are present, and the
+script check only proves the builder still runs. None of them proves the
+skill will _fire_. Read the description back and ask honestly: _if the
+user said nothing but a musical instruction, would this fire, and would I
+know which route and which tool to reach for?_ If not, the campaign is
+not finished.
 
 5. Format and test:
 

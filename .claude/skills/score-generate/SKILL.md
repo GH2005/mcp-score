@@ -4,7 +4,9 @@ description: >
   Generate music scores as MusicXML using music21 Python scripts. Use when the
   user says "create a score", "generate a chart", "write a lead sheet",
   "make an arrangement", "write out parts", or describes a musical piece to notate.
-  Do NOT use for live MuseScore manipulation (use the mcp-score MCP bridge tools).
+  Do NOT use when the score is already open in MuseScore -- editing an existing
+  document goes through the musescore-bridge skill, which routes between the
+  live bridge tools and hand-authored MusicXML.
 allowed-tools: [Bash, Write, Read]
 metadata:
   author: tskovlund
@@ -17,13 +19,30 @@ Generate music scores by writing and executing music21 Python scripts that expor
 
 ## When NOT to use this skill
 
-If the user already has a score **open in MuseScore** and wants notes, rehearsal
-marks, a time signature change, or a passage transposed added to it, use the
-**musescore-bridge** skill instead — it covers the mcp-score MCP bridge tools
-(`add_live_notes`, `process_live_sequence`, `add_live_rehearsal_mark`,
-`set_live_time_signature`, `transpose_passage`, etc.) that edit the live score
-directly, no file round-trip needed. Use this skill only for building a score
-**from scratch** as a new MusicXML file.
+If the user already has a score **open in MuseScore**, use the
+**musescore-bridge** skill instead. It owns every route into an existing
+document and the routing table that picks between them: the live bridge
+tools (`add_live_notes`, `process_live_sequence`, `add_live_rehearsal_mark`,
+`set_live_time_signature`, `transpose_passage`) for pitches, rhythm and
+clefs, and hand-authored MusicXML the user pastes or opens for anything
+carrying ties, slurs, dynamics, ornaments or repeats — which the live
+bridge has no API for. Do not assume the live path is right just because
+the score is open; a passage with a tie in it needs the file route either
+way.
+
+Use this skill only for building a score **from scratch** as a new
+MusicXML file.
+
+### When music21 is the wrong writer even here
+
+This skill generates MusicXML by running music21. That is the right tool
+for lead sheets, charts and straightforward parts. It is the wrong one as
+soon as the piece needs constructs music21 cannot emit — pedal lines,
+voltas, noteheads, cross-staff beaming, arbitrary tuplet brackets — or
+carries durations off the binary/tuplet grid, where its `makeRests` and
+`makeNotation` raise or silently rewrite the rhythm. In those cases build
+the file with `musescore-bridge/scripts/mxbuild.py` and verify it with
+`verify_fragment.py`; see `musescore-bridge/authoring-musicxml.md`.
 
 ## Instructions
 
