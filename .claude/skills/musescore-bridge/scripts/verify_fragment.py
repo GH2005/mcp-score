@@ -204,8 +204,8 @@ def scan(path, from_measure=None, skip_opening_attributes=False):
 
 
 def report_diff(a, b, left="sent", right="landed"):
-    print(f"\n{'feature':24s} {left:>7s} {right:>8s}   verdict")
-    print("-" * 56)
+    print(f"\n{'feature':24s} {left:>7s} {right:>8s}   verdict")  # noqa: T201
+    print("-" * 56)  # noqa: T201
     lost = []
     for k in a:
         if a[k] == 0 and b[k] == 0:
@@ -218,7 +218,7 @@ def report_diff(a, b, left="sent", right="landed"):
         else:
             verdict = f"partial {b[k]}/{a[k]}"
             lost.append(k)
-        print(f"{k:24s} {a[k]:7d} {b[k]:8d}   {verdict}")
+        print(f"{k:24s} {a[k]:7d} {b[k]:8d}   {verdict}")  # noqa: T201
     return lost
 
 
@@ -232,18 +232,18 @@ def main():
 
     failed = False
 
-    print("== structure")
+    print("== structure")  # noqa: T201
     problems = check_structure(args.file, parse_expect(args.expect))
     if problems:
         failed = True
         for p in problems[:20]:
-            print("   FAIL", p)
+            print("   FAIL", p)  # noqa: T201
     else:
-        print("   ok: schema order, measure fills, no negative positions")
+        print("   ok: schema order, measure fills, no negative positions")  # noqa: T201
 
     if args.against:
-        print(f"\n== landed audit ({args.against}, from bar {args.from_measure})")
-        print(
+        print(f"\n== landed audit ({args.against}, from bar {args.from_measure})")  # noqa: T201
+        print(  # noqa: T201
             "   (the fragment's opening clef/key/meter are excluded: they "
             "state where it starts, they are not changes)"
         )
@@ -252,7 +252,7 @@ def main():
             scan(args.against, args.from_measure),
         )
         if lost:
-            print(
+            print(  # noqa: T201
                 "\n   note: these did not survive -- hand the user a checklist:",
                 ", ".join(lost),
             )
@@ -260,24 +260,24 @@ def main():
 
     exe = musescore_exe()
     if not exe:
-        print("\n== import: SKIPPED (set MUSESCORE_EXE to enable the strongest check)")
+        print("\n== import: SKIPPED (set MUSESCORE_EXE to enable the strongest check)")  # noqa: T201
         return 1 if failed else 0
 
-    print("\n== import (MuseScore converter)")
+    print("\n== import (MuseScore converter)")  # noqa: T201
     tmp_rt = args.file.replace(".musicxml", "") + ".__rt.musicxml"
     rc = convert(exe, args.file, tmp_rt)
     if rc != 0:
         failed = True
-        print(
+        print(  # noqa: T201
             f"   FAIL exit {rc} -- read the newest log in "
             r"%LOCALAPPDATA%\MuseScore\MuseScore4\logs for the reason"
         )
     else:
-        print("   ok: exit 0, no corruption reported")
-        print("\n== round-trip")
+        print("   ok: exit 0, no corruption reported")  # noqa: T201
+        print("\n== round-trip")  # noqa: T201
         lost = report_diff(scan(args.file), scan(tmp_rt), "written", "read back")
         if lost:
-            print("\n   downgraded by the importer:", ", ".join(lost))
+            print("\n   downgraded by the importer:", ", ".join(lost))  # noqa: T201
         os.remove(tmp_rt)
 
     return 1 if failed else 0

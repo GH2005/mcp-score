@@ -19,8 +19,28 @@ sys.path.insert(
         "scripts",
     ),
 )
-import mxbuild as X  # noqa: E402
-from mxbuild import *  # noqa: F401,F403,E402
+from mxbuild import (  # noqa: E402
+    DIV,
+    attributes,
+    backup,
+    barline,
+    check_lengths,
+    dashes,
+    direction,
+    dynamic,
+    harmony,
+    label,
+    measure,
+    metronome,
+    new_score,
+    note,
+    octave_shift,
+    pedal,
+    rehearsal,
+    wedge,
+    words,
+    write,
+)
 
 Q, E, H = 840, 420, 1680
 B78, B44 = 2940, 3360  # 7/8 and 4/4 bars, in divisions
@@ -32,7 +52,7 @@ root, part = new_score("Paste Test Fragment")
 m = measure(part, 1)
 attributes(
     m,
-    divisions=X.DIV,
+    divisions=DIV,
     fifths=-3,
     time=("7", "8"),
     staves=2,
@@ -203,4 +223,4 @@ out = sys.argv[1] if len(sys.argv) > 1 else "paste_fragment.musicxml"
 write(root, out)
 expected = {n: B78 for n in range(1, 8)}
 expected[8] = B44
-print(f"wrote {out} | bad measure lengths: {check_lengths(out, expected)}")
+print(f"wrote {out} | bad measure lengths: {check_lengths(out, expected)}")  # noqa: T201

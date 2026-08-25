@@ -268,7 +268,8 @@ def write(root, path):
     with open(path, "wb") as fh:
         fh.write(b'<?xml version="1.0" encoding="UTF-8"?>\n')
         fh.write(
-            b'<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" '
+            b"<!DOCTYPE score-partwise PUBLIC "
+            b'"-//Recordare//DTD MusicXML 4.0 Partwise//EN" '
             b'"http://www.musicxml.org/dtds/partwise.dtd">\n'
         )
         ET.ElementTree(root).write(fh, encoding="UTF-8", xml_declaration=False)

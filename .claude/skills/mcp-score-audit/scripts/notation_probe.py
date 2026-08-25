@@ -25,12 +25,33 @@ sys.path.insert(
         "scripts",
     ),
 )
-import mxbuild as X  # noqa: E402
-from mxbuild import *  # noqa: F401,F403,E402
+from mxbuild import (  # noqa: E402
+    DIV,
+    attributes,
+    backup,
+    barline,
+    check_lengths,
+    coda,
+    dashes,
+    direction,
+    dynamic,
+    harmony,
+    label,
+    measure,
+    metronome,
+    new_score,
+    note,
+    octave_shift,
+    pedal,
+    rehearsal,
+    segno,
+    wedge,
+    words,
+    write,
+)
 
 Q, H, W, E, S = 840, 1680, 3360, 420, 210
 BAR44, BAR34, BAR78 = 3360, 2520, 2940
-DIV = X.DIV
 
 root, part = new_score("Notation Vocabulary Probe")
 
@@ -414,4 +435,4 @@ expected = {
     **{n: BAR34 for n in range(10, 18)},
     **{n: BAR78 for n in range(18, 21)},
 }
-print(f"wrote {out} | bad measure lengths: {check_lengths(out, expected)}")
+print(f"wrote {out} | bad measure lengths: {check_lengths(out, expected)}")  # noqa: T201
