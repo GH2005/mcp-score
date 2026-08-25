@@ -1,31 +1,44 @@
 ---
 name: musescore-bridge
 description: >
-  Correct usage patterns for the mcp-score MCP server's live MuseScore tools
-  and the mcp-score-bridge MuseScore plugin's WebSocket wire protocol, plus
-  the read/write musical intelligence the server provides (spelled note
-  entry, harmonic realization, four-part voicing, diatonic transposition,
-  melodic transformation, ornament write-out, passage analysis).
-  USE WHENEVER the user is composing, editing, or asking about music in a
-  score they already have open in MuseScore -- even when they name no tool,
-  no file and no application. Musical intent alone is the trigger: "add a
-  bassline under bars 9-16", "harmonize this", "reharmonize bar 12",
-  "put a ii-V here", "fill out the left hand", "add an inner voice",
-  "continue the phrase", "make bar 5 a Bb7", "voice this chord",
-  "voice this progression", "harmonize it in four parts", "write it for
-  SATB", "give each part its own line", "what inversion is that chord",
-  "move that up a third", "up a step but stay in the key", "move it up a
-  third in E-flat", "transpose it diatonically", "invert this motif",
-  "mirror this line around G", "turn the theme upside down", "play it
-  backwards", "reverse this phrase", "sequence this motif up a step",
-  "repeat it rising", "write out the trill", "spell out that turn",
-  "what key is this", "what chord is bar 8",
-  "does this voice-lead cleanly", "check this passage", "how does bar 20
-  look", "is that spelled right", "put this in bass clef", "switch to
-  treble here", "the left hand should read treble from bar 9", "this part
-  is all ledger lines", "why does this staff look wrong", "there are clef
-  changes in the middle of the bar", "get rid of these clef changes",
-  "my MIDI import put clefs everywhere", "what clef is this staff in".
+  How to read from and write to a score the user has open in MuseScore, by
+  every route available: the mcp-score MCP server's live tools, the
+  mcp-score-bridge plugin's WebSocket wire protocol, and hand-authored
+  MusicXML the user opens or pastes -- plus the musical intelligence the
+  server provides (spelled note entry, harmonic realization, four-part
+  voicing, diatonic transposition, melodic transformation, ornament
+  write-out, passage analysis).
+  USE WHENEVER the user is composing, editing, notating, or asking about
+  music in a score they already have open in MuseScore -- even when they
+  name no tool, no file and no application. Musical intent alone is the
+  trigger: "add a bassline under bars 9-16", "harmonize this",
+  "reharmonize bar 12", "put a ii-V here", "fill out the left hand",
+  "add an inner voice", "continue the phrase", "make bar 5 a Bb7",
+  "voice this chord", "voice this progression", "harmonize it in four
+  parts", "write it for SATB", "give each part its own line", "what
+  inversion is that chord", "move that up a third", "up a step but stay in
+  the key", "move it up a third in E-flat", "transpose it diatonically",
+  "invert this motif", "mirror this line around G", "turn the theme upside
+  down", "play it backwards", "reverse this phrase", "sequence this motif
+  up a step", "repeat it rising", "write out the trill", "spell out that
+  turn", "what key is this", "what chord is bar 8", "does this voice-lead
+  cleanly", "check this passage", "how does bar 20 look", "is that spelled
+  right", "put this in bass clef", "switch to treble here", "the left hand
+  should read treble from bar 9", "this part is all ledger lines", "why
+  does this staff look wrong", "there are clef changes in the middle of
+  the bar", "get rid of these clef changes", "my MIDI import put clefs
+  everywhere", "what clef is this staff in".
+  Also trigger on NOTATION intent, which the live bridge cannot write and
+  which needs the MusicXML route: "add slurs", "slur these notes", "tie
+  that over the barline", "put a crescendo here", "add dynamics", "mark it
+  forte", "add staccato", "articulate this", "put a trill on that note",
+  "add a turn", "grace notes", "add pedal marks", "put an 8va on this",
+  "add a repeat", "first and second endings", "add a rehearsal mark",
+  "change the time signature here", "put a key change in", "add a tempo
+  marking", "write this out properly", "notate it with", "clean up this
+  MIDI import", "split this into two hands", "which hand plays what",
+  "put the right hand on the top stave", "respell these accidentals",
+  "fix the enharmonic spelling".
   Use BEFORE calling any of: connect_to_musescore, disconnect_from_musescore,
   connect_to_dorico, disconnect_from_dorico, connect_to_sibelius,
   disconnect_from_sibelius, ping_score_app, get_live_score_info,
@@ -42,7 +55,8 @@ description: >
   addNote, addRest, setPitches, addRehearsalMark, setTimeSignature,
   getClefs, setClef, removeClef,
   appendMeasures, undo, processSequence, exportScore, apiProbe) -- or
-  before editing
+  before writing a MusicXML file for the user to open or paste into a
+  score -- or before editing
   src/mcp_score/musescore/mcp-score-bridge.qml. Also trigger on phrases like "connect
   to MuseScore", "read/write the live score", "what's in the open score",
   "add notes to the score", "write a chord", "add a second voice",
@@ -53,24 +67,63 @@ description: >
   4.7.4 if called the wrong way -- read this before guessing at
   parameters.
 metadata:
-  version: "1.7"
+  version: "2.0"
 ---
 
-# MuseScore bridge — correct usage
+# MuseScore — reading and writing the open score
 
-The full, verified reference is [`agent-playbook.md`](agent-playbook.md),
-right next to this file — the single source of truth for the support
-matrix (all 31 MCP tools and every wire command), the composing loop, the
-restart matrix, and how to re-run the live suite
-(`pytest -m live tests/live`) if MuseScore's behavior seems to have
-changed. **Read it before any mutating or wire-level call, and before
-anything beyond the two sections below** — do not guess at parameters,
-defaults, or which commands are safe.
+Two references and a script directory sit next to this file. Read the
+relevant one before acting; do not guess at parameters, defaults, or which
+commands are safe.
+
+- [`agent-playbook.md`](agent-playbook.md) — the live path: every MCP tool
+  and wire command, the composing loop, the restart matrix, how to re-run
+  `pytest -m live tests/live`.
+- [`authoring-musicxml.md`](authoring-musicxml.md) — the file path:
+  authoring raw MusicXML, the verification ladder, and what survives an
+  import versus a paste.
+- [`scripts/`](scripts) — `mxbuild.py` (MusicXML builder) and
+  `verify_fragment.py` (structure + import + round-trip audit).
 
 Connect first (`connect_to_musescore`) if you are not already connected.
 `realize_harmony`, `voice_progression` and `realize_ornament` are pure
-theory and answer without a score; every other tool below needs a live
+theory and answer without a score; every other tool needs a live
 connection.
+
+## Route first — which path for this job
+
+**Reading.** Three routes, and picking the wrong one makes you confidently
+wrong about the user's music.
+
+| To find out                                                                                                                                                                                 | Use                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| pitches, rhythm, ties, voices, chord symbols, dynamics, tempo, key, meter, barline types, rehearsal marks                                                                                   | `read_passage` — the digest, MusicXML-backed and enough for most questions          |
+| slurs, articulations, ornaments, fingering, arpeggios, pedal, hairpins, octave shifts, grace notes, noteheads, tremolo, voltas, cross-staff, **any staff text**, exact ticks, tuplet ratios | `export_live_score` + parse the file yourself — the digest is blind to all of these |
+| what clef actually governs a staff, mid-measure clef changes                                                                                                                                | `get_live_clefs`                                                                    |
+
+**The digest's tempo `text` is fabricated.** music21 invents a label from
+the number (88 → "maestoso") — a score marked _Andante_ will report
+"maestoso". Never quote it back to the user; export if the words matter.
+
+**Writing.** Match the route to what the edit contains, not to how big it
+feels.
+
+| The edit is                                                                                                                  | Route                                                                                                                                          |
+| ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| a few pitches, a rest, a clef, appended bars, a rehearsal mark, a time signature, a diatonic transposition                   | live bridge tools — fastest, no human step                                                                                                     |
+| anything carrying ties, slurs, dynamics, hairpins, articulations, ornaments, grace notes, pedal, 8va, tuplets, chord symbols | write a MusicXML **fragment**; the user pastes it                                                                                              |
+| restructuring most of the score — re-voicing, hand separation, respelling, meter overhaul                                    | write the **whole file**; the user opens it as the new working doc                                                                             |
+| a key signature, a tempo mark, repeat barlines, voltas, a barline style, a dashed line                                       | **a paste drops every one of these** (F3), and the bridge crashes or corrupts on most (rule 3). Whole-file route, or hand the user a checklist |
+
+The live bridge cannot write a tie or a slur at all: it has no API for
+them. That is not a limitation to work around with clever note entry — it
+is the signal to switch routes.
+
+**The routes combine.** After a paste, two of the dropped items you can
+restore yourself: `add_live_rehearsal_mark` and `set_live_time_signature`
+both work live. The rest — key signature, tempo mark, repeats, voltas,
+barline styles, dashed lines — are the user's hand or the whole-file
+route, because the bridge crashes or corrupts on them.
 
 ## Reach for the intelligence — default habits, not special requests
 
@@ -80,14 +133,16 @@ you to read the score first or to spell a note properly.
 
 | Before you…                                               | Do this                                                                                                                                                                                                                                                       |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| write anything                                            | `read_passage` the bars you are about to touch. You have no other way to see the score, and writing blind overwrites the user's work.                                                                                                                         |
+| write anything                                            | Read the bars you are about to touch, by the route the reading table names. Reading is your only window on the score, and writing blind overwrites the user's work.                                                                                           |
 | write one chord you have named                            | `realize_harmony("V7/V", "E-")` — do not work the pitches out in your head. It handles inversion figures (`ii65`), spells augmented sixths correctly, and reports the inversion and root back.                                                                |
 | write a progression as independent parts                  | `voice_progression(["I","IV","V7","I"], "C")`. Do not hand-place four parts yourself, and do not stack `realize_harmony` output per chord — that gives chords, not voice leading.                                                                             |
 | write any note at all                                     | pass `{"name": "E-4"}`. A bare MIDI number discards the spelling and lets MuseScore guess (rule 2).                                                                                                                                                           |
 | write a second line on one staff                          | `add_live_notes(..., voice=1)`. Stacking it into voice 0 makes a chord, not counterpoint.                                                                                                                                                                     |
+| write notation the bridge has no API for                  | Do not fake it. Build a MusicXML fragment with `scripts/mxbuild.py`, verify it, hand it over to paste — see [`authoring-musicxml.md`](authoring-musicxml.md).                                                                                                 |
+| restructure a whole score (hands, voicing, spelling)      | Export, rebuild the file **reusing the original `<note>` elements**, hand back a whole document. Do not re-enter 900 notes through the bridge.                                                                                                                |
 | move a passage by an interval _within its key_            | `transpose_passage(..., degrees=2, key="E-")` — "up a third" is `degrees=2`, "up a step" is `degrees=1`. Use `semitones` only for a real change of key.                                                                                                       |
 | invert, reverse, or sequence a motif                      | `transform_passage("invert"/"retrograde"/"sequence", ...)` after reading the range. Do not read the notes and re-enter them by hand.                                                                                                                          |
-| write out a trill, turn, or mordent                       | `realize_ornament("trill", "C5", "E-")`, then write its `entries_for_add_live_notes`. The plugin cannot attach an ornament _symbol_; this writes the notes it stands for.                                                                                     |
+| write out a trill, turn, or mordent                       | `realize_ornament("trill", "C5", "E-")` writes the notes it stands for. For the ornament _symbol_, use the file route — the bridge cannot attach one.                                                                                                         |
 | explain why a staff reads oddly, or before touching clefs | `get_live_clefs(staff)`. Entries with `atMeasureStart: false` are mid-measure clef changes — MuseScore's MIDI import inserts them to chase notes out of range, and they are invisible in `get_live_score_info` alone. Do not infer the clef from the pitches. |
 | move a part that has drifted into ledger lines            | `set_live_clef(measure, "treble", staff=1)` — change the clef rather than transposing the music. Transposing changes what is played; a clef change only changes how it is written.                                                                            |
 | clear an unwanted clef change                             | You cannot delete it. `set_live_clef` at that same measure **overwrites** it with the clef that should govern there; otherwise tell the user to delete it by hand. Do not call `remove_live_clefs` expecting it to work — it refuses.                         |
@@ -121,6 +176,10 @@ you to read the score first or to spell a note properly.
   system start, because they are laid out rather than authored. What it
   reports are the clefs that actually govern the reading; pass
   `includeRedundant: true` only when debugging the layout itself.
+- **music21 is the brain, not the mouth.** Use it to decide spelling,
+  harmony and transposition, and to verify your own output — never as the
+  MusicXML writer. Its serializer fails on the exact material that needs
+  this workflow (see [`authoring-musicxml.md`](authoring-musicxml.md)).
 
 Reach for `analyze_passage` when harmony or voice leading is genuinely in
 question, not reflexively after every edit, and read rule 6 before
@@ -171,3 +230,27 @@ playbook; the playbook carries the full detail and the reasoning.
    value from a read (`"names": ["E-4"]`) rather than counting to "the
    fourth event" down a listing. If a user offers a photograph of a
    score, ask for the file instead.
+
+## Four more rules for the file path
+
+Numbered separately so the seven above keep their references.
+
+- **F1. Never hand over an unverified file.** Run
+  `scripts/verify_fragment.py`: structure, then MuseScore's own converter
+  (exit 0), then a round-trip diff. The converter names the failing bar
+  and staff in `%LOCALAPPDATA%\MuseScore\MuseScore4\logs`.
+- **F2. Match the target's key, meter and divisions in a fragment.** Read
+  the target first. Key and meter changes do **not** survive a paste, so a
+  mismatched fragment lands on the right pitches spelled against the wrong
+  signature.
+- **F3. Account for everything the paste drops** — key signatures, time
+  signatures, repeats and voltas, barline styles, rehearsal marks, tempo
+  marks, dashed lines. Restore the two you can (`set_live_time_signature`,
+  `add_live_rehearsal_mark`) and hand back a checklist for the rest,
+  naming the bar and the change for each. A few clicks beats a silent
+  omission.
+- **F4. Reuse the user's own `<note>` elements when rewriting a score.**
+  Copy them verbatim and change only `<staff>`, `<voice>`, `<chord/>`,
+  beams and stems. Re-deriving durations re-interprets rhythm the user
+  played, and MIDI-derived material is full of values no notation library
+  will reproduce.
