@@ -46,7 +46,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Plugin transport ported to MuseScore's native `api.websocketserver` (the QtWebSockets QML module does not exist in MuseScore 4's plugin runtime)
 - `read_passage`/`get_measure_content` rewritten onto the export-based ground-truth path for MuseScore (the cursor walk saw at most the first element of a measure)
 - Plugin tracks the intra-measure cursor position so consecutive `addNote` commands accumulate instead of overwriting
-- Plugin version bumped to 0.4.5
+- Plugin version bumped to 0.4.6
+- **Bridge WebSocket port moved from 8765 to 18765.** 8765 sat below Windows' dynamic-port ceiling, where Hyper-V's NAT stack (`hns`/`winnat`) reserves 100-port blocks chosen at boot. A reserved `8671-8770` block swallowed it and the bridge stopped connecting with no change on either side. The failure is invisible from both ends: `api.websocketserver.listen()` returns normally when the OS refuses the bind, and the port then reads as _free_ rather than taken, so a healthy-looking plugin serves nothing. 18765 sits above the dynamic range, out of reach of both the reservations and transient ephemeral use. The live suite now derives its port from `DEFAULT_PORT` rather than restating the literal
 
 ### Fixed
 

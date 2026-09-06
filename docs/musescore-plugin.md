@@ -4,7 +4,7 @@
 
 ## Overview
 
-The MuseScore plugin runs inside MuseScore 4 and opens a WebSocket server on `localhost:8765`. The mcp-score Python server connects to this WebSocket to read from and write to the active score.
+The MuseScore plugin runs inside MuseScore 4 and opens a WebSocket server on `localhost:18765`. The mcp-score Python server connects to this WebSocket to read from and write to the active score.
 
 The plugin is only needed for **manipulation** and **analysis** tools (reading passages, arranging, transposing, etc.). **Generation** tools work without it -- they produce MusicXML files that MuseScore can open directly.
 
@@ -47,21 +47,21 @@ After replacing the plugin file you must restart MuseScore and run the
 plugin again for the new version to take effect. Verify the running
 version with the `getScore` command: its reply carries `pluginVersion`.
 
-The plugin starts a WebSocket server on port 8765. It runs as a dock plugin (invisible) so it stays active as long as MuseScore is open. The mcp-score Python server connects automatically when you use manipulation or analysis tools.
+The plugin starts a WebSocket server on port 18765. It runs as a dock plugin (invisible) so it stays active as long as MuseScore is open. The mcp-score Python server connects automatically when you use manipulation or analysis tools.
 
 ## Verifying the connection
 
 After enabling the plugin, you can verify it is running by checking the MuseScore console (View > Console in some builds) for the message:
 
 ```
-[mcp-score] Bridge plugin started -- WebSocket server on port 8765
+[mcp-score] Bridge plugin started -- WebSocket server on port 18765
 ```
 
 You can also test the connection with any WebSocket client:
 
 ```bash
 # Using websocat (install with: cargo install websocat)
-echo '{"command": "ping"}' | websocat ws://localhost:8765
+echo '{"command": "ping"}' | websocat ws://localhost:18765
 
 # Expected response: {"result":"pong"}
 ```
@@ -260,8 +260,25 @@ This example uses `processSequence` to write a four-note melody in the first mea
 ### WebSocket connection fails
 
 - Ensure the plugin is running (look for the `[mcp-score]` log messages in MuseScore's console)
-- Verify no other application is using port 8765: `lsof -i :8765`
+- Verify no other application is using port 18765: `lsof -i :18765` (macOS/Linux) or `Get-NetTCPConnection -LocalPort 18765` (Windows)
 - Check MuseScore's console for error messages
+
+**If nothing is listening at all and the plugin looks fine**, the bind may
+have been refused rather than the plugin failing. `api.websocketserver.listen()`
+reports no error when the OS refuses the port, so the only symptom is an
+absent listener. On Windows, check whether the port fell inside a reserved
+block:
+
+```powershell
+netsh interface ipv4 show excludedportrange protocol=tcp
+```
+
+Hyper-V's NAT stack reserves 100-port blocks, chosen at boot, and anything
+below the dynamic-range ceiling (`netsh int ipv4 show dynamicport tcp`) is
+eligible. A port inside a reserved block fails to bind while still reading
+as free, and the block moves between reboots -- so this presents as the
+bridge working for months and then failing with nothing changed. Port 18765
+is chosen to sit above the dynamic range for this reason.
 
 ### "No score is currently open" errors
 

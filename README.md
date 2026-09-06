@@ -96,7 +96,7 @@ After `mcp-score install-plugin`:
 1. Open MuseScore 4
 2. Go to **Plugins > Plugin Manager**
 3. Enable **MCP Score Bridge**
-4. The plugin starts a WebSocket server on port 8765
+4. The plugin starts a WebSocket server on port 18765
 
 See [MuseScore plugin docs](docs/musescore-plugin.md) for details.
 

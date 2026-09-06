@@ -33,7 +33,7 @@ MuseScore {
     id: root
     menuPath: "Plugins.MCP Score Bridge"
     description: "WebSocket bridge for mcp-score MCP server"
-    version: "0.4.5"
+    version: "0.4.6"
 
     // Keep the plugin running after onRun (required for persistent server).
     pluginType: "dock"
@@ -45,7 +45,12 @@ MuseScore {
     // Constants
     // ===================================================================
 
-    readonly property int serverPort: 8765
+    // 18765, not 8765: Windows reserves TCP ranges for dynamic allocation
+    // (seen here as 8671-8770, which swallowed 8765), and everything below
+    // 15000 is inside the ephemeral range where a port can also be taken
+    // transiently. listen() reports no error when the bind is refused -- the
+    // only symptom is that nothing is listening -- so stay above the range.
+    readonly property int serverPort: 18765
     readonly property string serverHost: "localhost"
     readonly property string logPrefix: "[mcp-score]"
 

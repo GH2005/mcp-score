@@ -37,7 +37,7 @@ async def connect_to_musescore(
 
     Args:
         host: WebSocket host (default: localhost).
-        port: WebSocket port (default: 8765).
+        port: WebSocket port (default: 18765).
     """
     await _disconnect_active_bridge()
 

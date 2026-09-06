@@ -51,7 +51,7 @@ description: >
   transpose_passage, add_live_chord_symbol, set_live_barline,
   set_live_key_signature, set_live_tempo, or undo_last_action -- or before
   sending any raw JSON command to the plugin's WebSocket bridge
-  (ws://localhost:8765, e.g. ping, getScore, goToMeasure, goToStaff,
+  (ws://localhost:18765, e.g. ping, getScore, goToMeasure, goToStaff,
   addNote, addRest, setPitches, addRehearsalMark, setTimeSignature,
   getClefs, setClef, removeClef,
   appendMeasures, undo, processSequence, exportScore, apiProbe) -- or

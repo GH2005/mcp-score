@@ -36,7 +36,7 @@ mcp-score provides two complementary approaches for AI-driven music notation:
                      +------+--------+--------+----+
                             |        |        |
                 WebSocket   |        |        | WebSocket
-           (ws://:8765)     |        |        | (ws://:1898)
+           (ws://:18765)    |        |        | (ws://:1898)
                             |        |        |
             +---------------v-+  +---v------+ +--v-----------+
             | MuseScore QML   |  | Dorico   | | Sibelius     |
@@ -285,7 +285,7 @@ music21 (MIT, Python) handles transposing instruments, voice leading, and MusicX
 
 All three supported applications use WebSocket for communication, but the protocols differ:
 
-- **MuseScore**: QML plugin runs inside MuseScore, opens a WebSocket server on port 8765. JSON messages with `command` and `params` fields. Custom protocol -- implemented directly in `MuseScoreBridge`.
+- **MuseScore**: QML plugin runs inside MuseScore, opens a WebSocket server on port 18765. JSON messages with `command` and `params` fields. Custom protocol -- implemented directly in `MuseScoreBridge`.
 - **Dorico & Sibelius**: Both use the same "Remote Control" protocol with `message`/`commandName` fields and session token handshake. Shared logic lives in `RemoteControlBridge`; thin subclasses provide application-specific defaults (port, name).
 
 ### Ground-truth reads on MuseScore

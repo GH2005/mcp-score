@@ -78,5 +78,5 @@ testpaths = ["tests"]
 # (a command-line -m overrides the one in addopts).
 addopts = "-m 'not live'"
 markers = [
-    "live: requires a running MuseScore instance with the mcp-score-bridge plugin serving ws://localhost:8765",
+    "live: requires a running MuseScore instance with the mcp-score-bridge plugin serving ws://localhost:18765",
 ]
