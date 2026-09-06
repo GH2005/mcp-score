@@ -20,7 +20,14 @@ __all__ = ["DEFAULT_PORT", "MuseScoreBridge"]
 logger = logging.getLogger(__name__)
 
 #: Default WebSocket port for the MuseScore QML plugin.
-DEFAULT_PORT = 8765
+#:
+#: Deliberately above 15000. Windows hands out ports below its dynamic-range
+#: ceiling and lets Hyper-V's NAT stack reserve 100-port blocks inside it; a
+#: bind into a reserved block fails with access-denied while the port still
+#: reads as empty, and the plugin's ``listen()`` reports no error. The old
+#: 8765 was swallowed exactly that way. Keep this in step with ``serverPort``
+#: in ``mcp-score-bridge.qml``.
+DEFAULT_PORT = 18765
 
 
 class MuseScoreBridge(ScoreBridge):

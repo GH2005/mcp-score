@@ -67,7 +67,7 @@ class TestMuseScoreBridgeReconnect:
         )
 
         # Act — force the reconnect attempt to fail regardless of whether a
-        # real MuseScore instance happens to be listening on localhost:8765
+        # real MuseScore instance happens to be listening on localhost:18765
         with patch(
             "mcp_score.bridge.musescore.websockets.connect",
             side_effect=OSError("connection refused"),

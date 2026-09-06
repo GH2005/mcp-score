@@ -2,7 +2,7 @@
 
 > Reference — every claim here was verified against a live MuseScore
 > Studio 4.7.4 (Windows 11) by the committed live test suite
-> (`tests/live/`). Verification date: 2026-07-27. Plugin version: 0.4.5
+> (`tests/live/`). Verification date: 2026-09-06. Plugin version: 0.4.6
 > (clef support: reading clefs and writing them work; removing them is
 > impossible in this MuseScore build).
 > When in doubt, re-run the suite; it is the source of truth.
@@ -10,7 +10,7 @@
 ## The stack
 
 ```
-MCP tool  →  ScoreBridge (Python)  →  ws://localhost:8765  →  mcp-score-bridge.qml  →  curScore
+MCP tool  →  ScoreBridge (Python)  →  ws://localhost:18765  →  mcp-score-bridge.qml  →  curScore
                    ↑
               music21 (mcp_score.theory, mcp_score.musicxml)
 ```
@@ -72,7 +72,7 @@ the user to save the file or to report what they see in MuseScore.
 
 1. **Snapshot over the wire.** Send
    `{"command": "exportScore", "params": {"path": "C:/abs/path/out.musicxml", "format": "musicxml"}}`
-   to `ws://localhost:8765` (e.g. a small script via
+   to `ws://localhost:18765` (e.g. a small script via
    `uv run --with websockets python` — on Windows a bare `python` is
    usually the Microsoft Store stub that only prints an install prompt,
    verified on this machine). Expect
@@ -106,7 +106,7 @@ the user to save the file or to report what they see in MuseScore.
 
 | Surface                                                                                 | Notes                                                                                                                                                                                                                                                                                                                                                                          |
 | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `connect_to_musescore(host="localhost", port=8765)`, `disconnect_from_musescore`        | Connect first; every other tool needs an active connection. The bridge auto-connects and retries once on connection loss.                                                                                                                                                                                                                                                      |
+| `connect_to_musescore(host="localhost", port=18765)`, `disconnect_from_musescore`       | Connect first; every other tool needs an active connection. The bridge auto-connects and retries once on connection loss.                                                                                                                                                                                                                                                      |
 | `ping_score_app` (wire `ping`), `get_live_score_info` (wire `getScore`)                 | `getScore` reply carries `pluginVersion` (stale-plugin detection), `measureCount`, key/time signature, parts with staff ranges (derived from tracks).                                                                                                                                                                                                                          |
 | `export_live_score(path?, format="musicxml")`                                           | The ground-truth snapshot. Rejects `mscz` (see limitations), relative paths, unknown formats.                                                                                                                                                                                                                                                                                  |
 | `read_passage(start, end, staff?)`                                                      | Accurate: export + parse. Reports every note, chord, rest, voice, and annotation per measure/staff.                                                                                                                                                                                                                                                                            |
@@ -196,7 +196,7 @@ this loop in short imperative form; this is the reasoning behind it.)
 uv run --project <repo> pytest -m live tests/live -q
 ```
 
-- Requires MuseScore running with the plugin serving `ws://localhost:8765`
+- Requires MuseScore running with the plugin serving `ws://localhost:18765`
   (the suite skips itself otherwise).
 - **The suite mutates the open score** (appends scratch measures and
   writes test content). A guard refuses to run unless the score title
@@ -220,6 +220,35 @@ uv run --project <repo> pytest -m live tests/live -q
 | Python source, exercised via an MCP client  | reinstall/refresh however the client launches the server                                                      | restart the MCP client (e.g. Claude Code)                                                |
 
 ## Gotchas learned the hard way
+
+- **A refused port bind is invisible from both ends, and the bridge port
+  is 18765 because of it.** `api.websocketserver.listen()` reports no
+  error when the OS refuses the port: it returns normally, the plugin
+  window opens, `onRun` completes, and nothing listens. From the client
+  the port reads as _empty_ rather than taken, so every obvious check
+  (process running, plugin file current, `pluginVersion`, MuseScore
+  build) says healthy while nothing works. Windows is the trap: Hyper-V's
+  NAT stack (`hns` / `winnat`) reserves **100-port blocks chosen at
+  boot**, and every port below the dynamic-range ceiling is eligible.
+  The old port 8765 was swallowed by a reserved `8671-8770` block with no
+  code change on either side — the bridge worked for months and then did
+  not. Diagnose with:
+
+  ```powershell
+  Get-NetTCPConnection -LocalPort 18765          # nothing = never bound
+  netsh interface ipv4 show excludedportrange protocol=tcp
+  netsh int ipv4 show dynamicport tcp
+  ```
+
+  If the port sits inside a reserved block, move the port rather than
+  fighting the reservation — the blocks move on their own at the next
+  boot. To tell "the plugin never ran" from "the bind was refused", run a
+  throwaway plugin that only calls `listen()` on a different port and
+  shows the outcome in a visible dock: QML `console.log` does **not**
+  reach MuseScore's log file, so on-screen text is the only channel out.
+  Note that `Documents/MuseScore4/Plugins` is a junction into the repo,
+  so a scratch plugin dropped there lands in the working tree — delete it
+  when done.
 
 - **Three separate clef traps, each of which fails _silently_ rather than
   loudly.** They cost four MuseScore restarts to find, and every one of

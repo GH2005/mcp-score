@@ -97,7 +97,7 @@ a defect to move server-side, not a feature to extend.
 
 1. MuseScore running with the plugin dock launched (**Plugins →
    mcp-score-bridge**). The dock must be relaunched after every MuseScore
-   restart, or nothing listens on `ws://localhost:8765`.
+   restart, or nothing listens on `ws://localhost:18765`.
 2. Confirm the _running_ plugin is the one on disk: `getScore` →
    `pluginVersion`. A stale dock silently invalidates every result.
 3. Use a **disposable score**, never the user's real work. The live suite

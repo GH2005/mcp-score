@@ -19,7 +19,7 @@ Connect to a running MuseScore instance. The MCP Score Bridge QML plugin must be
 | Parameter | Type  | Default       | Description    |
 | --------- | ----- | ------------- | -------------- |
 | `host`    | `str` | `"localhost"` | WebSocket host |
-| `port`    | `int` | `8765`        | WebSocket port |
+| `port`    | `int` | `18765`       | WebSocket port |
 
 ### `disconnect_from_musescore`
 

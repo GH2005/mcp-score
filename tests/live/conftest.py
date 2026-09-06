@@ -24,13 +24,16 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from mcp_score.bridge import get_musescore_bridge, set_active_bridge
+from mcp_score.bridge.musescore import DEFAULT_PORT
 from tests.live import mxl
 
 if TYPE_CHECKING:
     from mcp_score.bridge.musescore import MuseScoreBridge
 
 BRIDGE_HOST = "localhost"
-BRIDGE_PORT = 8765
+# Taken from the bridge rather than restated, so the suite cannot drift
+# from the port the server actually dials.
+BRIDGE_PORT = DEFAULT_PORT
 BRIDGE_URI = f"ws://{BRIDGE_HOST}:{BRIDGE_PORT}"
 ARTIFACTS_DIR = Path(__file__).resolve().parent / "artifacts"
 
